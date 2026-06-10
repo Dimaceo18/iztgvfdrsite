@@ -104,6 +104,8 @@ def create_wp_draft(title, content, media_id=None):
             return True
         else:
             logger.error(f"Ошибка: {response.status_code}")
+            if response.status_code == 401:
+                logger.error("❌ Ошибка авторизации в WordPress. Проверь WP_USERNAME и WP_PASSWORD")
             return False
     except Exception as e:
         logger.error(f"Ошибка: {e}")
@@ -117,7 +119,7 @@ async def handle_channel_post(update: Update, context):
         
         channel_post = update.channel_post
         if not channel_post:
-            logger.warning("⚠️ Нет channel_post")
+            logger.warning("⚠️ Нет channel_post в update")
             return
         
         real_chat_id = channel_post.chat_id
@@ -126,7 +128,7 @@ async def handle_channel_post(update: Update, context):
         
         text = channel_post.caption or channel_post.text or ""
         title, content_text = extract_title_and_content(text)
-        logger.info(f"📌 Заголовок: {title[:50]}...")
+        logger.info(f"📌 Заголовок: {title[:50]}... (длина: {len(title)})")
         
         media_id = None
         if channel_post.photo:
@@ -135,7 +137,7 @@ async def handle_channel_post(update: Update, context):
                 photo_file = await context.bot.get_file(photo.file_id)
                 media_id = upload_image_to_wp(photo_file.file_path, f"photo_{channel_post.message_id}.jpg")
                 if media_id:
-                    logger.info(f"📸 Фото загружено")
+                    logger.info(f"📸 Фото загружено, ID: {media_id}")
             except Exception as e:
                 logger.error(f"Ошибка фото: {e}")
         
@@ -148,15 +150,15 @@ async def handle_channel_post(update: Update, context):
         success = create_wp_draft(title, formatted_content, media_id)
         
         if success:
-            logger.info(f"✨ Пост сохранен")
+            logger.info(f"✨ Пост '{title[:50]}...' сохранен как черновик")
         else:
-            logger.error("❌ Ошибка")
+            logger.error("❌ Не удалось создать черновик")
             
         logger.info("=" * 50)
         
     except Exception as e:
-        logger.error(f"❌ Ошибка: {e}")
-        logger.exception("Детали:")
+        logger.error(f"❌ Ошибка обработки поста: {e}")
+        logger.exception("Детали ошибки:")
 
 # Создаем приложение Telegram
 application = Application.builder().token(TELEGRAM_TOKEN).build()
@@ -168,11 +170,15 @@ application.add_handler(MessageHandler(
 ))
 logger.info("✅ Обработчик добавлен")
 
+# Инициализируем application (ВАЖНО!)
+async def init_application():
+    await application.initialize()
+    logger.info("✅ Application инициализирована")
+
 @app.route('/webhook', methods=['POST'])
 def webhook():
     """Endpoint для вебхуков Telegram"""
     try:
-        # Получаем данные от Telegram
         json_data = request.get_json(force=True)
         logger.info("🔔 Получен вебхук от Telegram")
         
@@ -207,16 +213,20 @@ if __name__ == '__main__':
     logger.info(f"🚀 Запуск бота...")
     logger.info(f"🔗 Вебхук URL: {webhook_url}")
     
-    # Устанавливаем вебхук
-    async def setup_webhook():
-        try:
-            await application.bot.delete_webhook()
-            await application.bot.set_webhook(url=webhook_url)
-            logger.info("✅ Вебхук установлен")
-        except Exception as e:
-            logger.error(f"❌ Ошибка: {e}")
+    # Инициализируем и запускаем
+    async def startup():
+        # Инициализируем application
+        await application.initialize()
+        logger.info("✅ Application инициализирована")
+        
+        # Устанавливаем вебхук
+        await application.bot.delete_webhook()
+        await application.bot.set_webhook(url=webhook_url)
+        logger.info("✅ Вебхук установлен")
     
-    asyncio.run(setup_webhook())
+    # Запускаем инициализацию
+    asyncio.run(startup())
     
+    # Запускаем Flask сервер
     port = int(os.getenv('PORT', 8000))
     app.run(host='0.0.0.0', port=port)
