@@ -28,6 +28,9 @@ WP_MEDIA_URL = f"{WP_URL}/wp-json/wp/v2/media"
 # Flask приложение
 app = Flask(__name__)
 
+# Создаём сессию для постоянного соединения с WordPress
+wp_session = requests.Session()
+
 def extract_title_and_content(text):
     """Извлечение заголовка из текста"""
     if not text:
@@ -88,7 +91,12 @@ def download_and_upload_photo(file_id):
         photo_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
         logger.info(f"Скачивание фото: {photo_url[:50]}...")
         
-        photo_response = requests.get(photo_url, timeout=60)
+        # Заголовки для скачивания
+        download_headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        
+        photo_response = requests.get(photo_url, headers=download_headers, timeout=60)
         
         if photo_response.status_code != 200:
             logger.error(f"Ошибка скачивания фото: {photo_response.status_code}")
@@ -97,16 +105,20 @@ def download_and_upload_photo(file_id):
         # Определяем тип контента
         content_type = photo_response.headers.get('content-type', 'image/jpeg')
         
-        # Загружаем в WordPress
-        headers = {
+        # Заголовки для WordPress
+        wp_headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Content-Type': content_type
+            'Accept': 'application/json',
+            'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
+            'Content-Type': content_type,
+            'Content-Disposition': f'attachment; filename="telegram_photo_{int(time.time())}.jpg"'
         }
         
-        wp_response = requests.post(
+        # Загружаем в WordPress через сессию
+        wp_response = wp_session.post(
             WP_MEDIA_URL,
             auth=(WP_USERNAME, WP_PASSWORD),
-            headers=headers,
+            headers=wp_headers,
             data=photo_response.content,
             timeout=60
         )
@@ -117,8 +129,9 @@ def download_and_upload_photo(file_id):
             return media_id
         else:
             logger.error(f"Ошибка WP при загрузке фото: {wp_response.status_code}")
+            logger.error(f"Ответ: {wp_response.text[:200]}")
             if wp_response.status_code == 401:
-                logger.error("❌ Ошибка авторизации в WordPress! Проверь WP_USERNAME и WP_PASSWORD")
+                logger.error("❌ Ошибка авторизации! Проверь WP_USERNAME и WP_PASSWORD")
             return None
             
     except requests.exceptions.Timeout:
@@ -140,16 +153,23 @@ def create_wp_draft(title, content, media_id=None):
         post_data['featured_media'] = media_id
     
     try:
-        # Заголовки как у браузера
+        # Полные заголовки как у реального браузера
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'application/json',
-            'Content-Type': 'application/json'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Content-Type': 'application/json',
+            'Origin': WP_URL,
+            'Referer': WP_URL,
+            'Connection': 'keep-alive',
+            'Cache-Control': 'no-cache'
         }
         
         logger.info(f"Отправка запроса в WordPress: {WP_API_URL}/posts")
         
-        response = requests.post(
+        # Используем сессию для сохранения соединения
+        response = wp_session.post(
             f"{WP_API_URL}/posts",
             auth=(WP_USERNAME, WP_PASSWORD),
             json=post_data,
@@ -178,13 +198,17 @@ def create_wp_draft(title, content, media_id=None):
             
     except requests.exceptions.Timeout:
         logger.error("❌ Таймаут подключения к WordPress")
-        logger.error("   Возможные причины: блокировка IP, медленный хостинг, проблемы с сетью")
+        logger.error("   Возможные причины:")
+        logger.error("   - Хостинг блокирует IP Render")
+        logger.error("   - Медленный ответ сервера")
+        logger.error("   - Проблемы с сетью")
         return False
     except requests.exceptions.ConnectionError as e:
         logger.error(f"❌ Ошибка подключения: {e}")
         logger.error("   Проверь:")
-        logger.error("   - Доступен ли сайт: WP_URL = " + WP_URL)
+        logger.error("   - Доступен ли сайт: " + WP_URL)
         logger.error("   - Не блокирует ли хостинг запросы из Render")
+        logger.error("   - Нет ли проблем с SSL сертификатом")
         return False
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
@@ -193,8 +217,8 @@ def create_wp_draft(title, content, media_id=None):
 async def handle_channel_post(update: Update, context):
     """Обработка постов из канала"""
     try:
-        logger.info("=" * 50)
-        logger.info("🔍 ОБРАБОТЧИК ВЫЗВАН!")
+        logger.info("=" * 60)
+        logger.info("🔍 НОВЫЙ ПОСТ ПОЛУЧЕН")
         
         channel_post = update.channel_post
         if not channel_post:
@@ -202,47 +226,49 @@ async def handle_channel_post(update: Update, context):
             return
         
         real_chat_id = channel_post.chat_id
-        logger.info(f"📨 Новый пост: ID {channel_post.message_id}")
+        logger.info(f"📨 ID сообщения: {channel_post.message_id}")
         logger.info(f"🔍 ID канала: {real_chat_id}")
         
         text = channel_post.caption or channel_post.text or ""
         title, content_text = extract_title_and_content(text)
-        logger.info(f"📌 Заголовок: {title[:50]}... (длина: {len(title)})")
+        logger.info(f"📌 Заголовок: {title[:60]}...")
+        logger.info(f"📏 Длина заголовка: {len(title)} символов")
         
         # Обработка фото
         media_id = None
         if channel_post.photo:
             try:
                 photo = channel_post.photo[-1]
-                logger.info(f"📸 Обработка фото, file_id: {photo.file_id}")
+                logger.info(f"📸 Найдено фото, обработка...")
                 media_id = download_and_upload_photo(photo.file_id)
                 if media_id:
-                    logger.info(f"✅ Фото успешно загружено")
+                    logger.info(f"✅ Фото успешно загружено (ID: {media_id})")
                 else:
                     logger.warning("⚠️ Фото не загружено, продолжаем без фото")
             except Exception as e:
-                logger.error(f"Ошибка фото: {e}")
+                logger.error(f"Ошибка при обработке фото: {e}")
         
         # Форматируем контент
         formatted_content = format_content_for_wp(content_text)
         
         # Добавляем информацию об источнике
         if channel_post.date:
-            source_info = f'<p><small>Источник: Telegram | {channel_post.date.strftime("%d.%m.%Y %H:%M")}</small></p>'
+            source_info = f'<p><small>📱 Источник: Telegram | {channel_post.date.strftime("%d.%m.%Y %H:%M")}</small></p>'
             formatted_content += source_info
         
         # Создаем черновик
+        logger.info("📤 Отправка в WordPress...")
         success = create_wp_draft(title, formatted_content, media_id)
         
         if success:
-            logger.info(f"✨ Пост '{title[:50]}...' сохранен как черновик")
+            logger.info(f"✨ ГОТОВО! Пост сохранен как черновик")
         else:
-            logger.error("❌ Не удалось создать черновик")
+            logger.error("❌ НЕ УДАЛОСЬ создать черновик")
             
-        logger.info("=" * 50)
+        logger.info("=" * 60)
         
     except Exception as e:
-        logger.error(f"❌ Ошибка обработки поста: {e}")
+        logger.error(f"❌ Критическая ошибка обработки: {e}")
         logger.exception("Детали ошибки:")
 
 # Создаем приложение Telegram
@@ -253,7 +279,12 @@ application.add_handler(MessageHandler(
     (filters.TEXT | filters.PHOTO | filters.CAPTION),
     handle_channel_post
 ))
-logger.info("✅ Обработчик добавлен")
+logger.info("✅ Обработчик сообщений добавлен")
+
+# Настраиваем сессию для WordPress
+wp_session.headers.update({
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+})
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -275,11 +306,19 @@ def webhook():
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'healthy'})
+    """Health check для Render"""
+    return jsonify({'status': 'healthy', 'service': 'Telegram to WordPress Bot'})
 
 @app.route('/', methods=['GET'])
 def index():
-    return jsonify({'status': 'Bot is running'})
+    return jsonify({
+        'status': 'Bot is running',
+        'message': 'Telegram to WordPress Bot',
+        'endpoints': {
+            'webhook': '/webhook (POST)',
+            'health': '/health (GET)'
+        }
+    })
 
 if __name__ == '__main__':
     render_url = os.getenv('RENDER_EXTERNAL_URL')
@@ -290,7 +329,7 @@ if __name__ == '__main__':
     
     webhook_url = f"{render_url}/webhook"
     
-    logger.info(f"🚀 Запуск бота...")
+    logger.info(f"🚀 ЗАПУСК БОТА...")
     logger.info(f"🔗 Вебхук URL: {webhook_url}")
     logger.info(f"🌐 WordPress URL: {WP_URL}")
     logger.info(f"👤 WordPress Username: {WP_USERNAME}")
@@ -300,10 +339,11 @@ if __name__ == '__main__':
         await application.initialize()
         await application.bot.delete_webhook()
         await application.bot.set_webhook(url=webhook_url)
-        logger.info("✅ Вебхук установлен")
+        logger.info("✅ Вебхук установлен успешно")
     
     import asyncio
     asyncio.run(setup())
     
     port = int(os.getenv('PORT', 8000))
+    logger.info(f"🎯 Сервер запущен на порту {port}")
     app.run(host='0.0.0.0', port=port)
