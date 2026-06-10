@@ -142,11 +142,12 @@ def download_and_upload_photo(file_id):
         return None
 
 def create_wp_draft(title, content, media_id=None):
-    """Создание черновика в WordPress"""
+    """Создание черновика в WordPress (тип записи: news)"""
     post_data = {
         'title': title,
         'content': content,
-        'status': 'draft',
+        'status': 'draft',      # Черновик, а не публикация
+        'type': 'news',          # Кастомный тип записи "Новости"
     }
     
     if media_id:
@@ -166,11 +167,12 @@ def create_wp_draft(title, content, media_id=None):
             'Cache-Control': 'no-cache'
         }
         
-        logger.info(f"Отправка запроса в WordPress: {WP_API_URL}/posts")
+        logger.info(f"Отправка запроса в WordPress: {WP_API_URL}/news")
+        logger.info(f"Тип записи: news (кастомный тип)")
         
-        # Используем сессию для сохранения соединения
+        # Используем правильный endpoint для кастомного типа записей
         response = wp_session.post(
-            f"{WP_API_URL}/posts",
+            f"{WP_API_URL}/news",  # Вместо /posts используем /news
             auth=(WP_USERNAME, WP_PASSWORD),
             json=post_data,
             headers=headers,
@@ -179,7 +181,7 @@ def create_wp_draft(title, content, media_id=None):
         
         if response.status_code == 201:
             post_link = response.json()['link']
-            logger.info(f"✅ Черновик создан: {post_link}")
+            logger.info(f"✅ Черновик создан в разделе 'Новости': {post_link}")
             return True
         else:
             logger.error(f"Ошибка создания поста: {response.status_code}")
@@ -188,27 +190,19 @@ def create_wp_draft(title, content, media_id=None):
             if response.status_code == 401:
                 logger.error("❌ Ошибка авторизации! Проверь:")
                 logger.error("   - WP_USERNAME (логин, не email)")
-                logger.error("   - WP_PASSWORD (пароль приложения, не обычный пароль)")
+                logger.error("   - WP_PASSWORD (пароль приложения)")
             elif response.status_code == 403:
-                logger.error("❌ Доступ запрещён. Проверь права пользователя в WordPress")
+                logger.error("❌ Доступ запрещён. Проверь права пользователя")
             elif response.status_code == 404:
-                logger.error("❌ API не найден. Проверь WP_URL и что REST API включен")
+                logger.error("❌ API для /news не найден. Проверь, что тип записи существует")
             
             return False
             
     except requests.exceptions.Timeout:
         logger.error("❌ Таймаут подключения к WordPress")
-        logger.error("   Возможные причины:")
-        logger.error("   - Хостинг блокирует IP Render")
-        logger.error("   - Медленный ответ сервера")
-        logger.error("   - Проблемы с сетью")
         return False
     except requests.exceptions.ConnectionError as e:
         logger.error(f"❌ Ошибка подключения: {e}")
-        logger.error("   Проверь:")
-        logger.error("   - Доступен ли сайт: " + WP_URL)
-        logger.error("   - Не блокирует ли хостинг запросы из Render")
-        logger.error("   - Нет ли проблем с SSL сертификатом")
         return False
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
@@ -256,12 +250,12 @@ async def handle_channel_post(update: Update, context):
             source_info = f'<p><small>📱 Источник: Telegram | {channel_post.date.strftime("%d.%m.%Y %H:%M")}</small></p>'
             formatted_content += source_info
         
-        # Создаем черновик
-        logger.info("📤 Отправка в WordPress...")
+        # Создаем черновик в разделе "Новости"
+        logger.info("📤 Отправка в WordPress (раздел Новости)...")
         success = create_wp_draft(title, formatted_content, media_id)
         
         if success:
-            logger.info(f"✨ ГОТОВО! Пост сохранен как черновик")
+            logger.info(f"✨ ГОТОВО! Пост сохранен как черновик в разделе 'Новости'")
         else:
             logger.error("❌ НЕ УДАЛОСЬ создать черновик")
             
@@ -274,7 +268,7 @@ async def handle_channel_post(update: Update, context):
 # Создаем приложение Telegram
 application = Application.builder().token(TELEGRAM_TOKEN).build()
 
-# Добавляем обработчик (без фильтрации по каналу для отладки)
+# Добавляем обработчик
 application.add_handler(MessageHandler(
     (filters.TEXT | filters.PHOTO | filters.CAPTION),
     handle_channel_post
@@ -314,6 +308,8 @@ def index():
     return jsonify({
         'status': 'Bot is running',
         'message': 'Telegram to WordPress Bot',
+        'post_type': 'news (custom post type)',
+        'status': 'draft',
         'endpoints': {
             'webhook': '/webhook (POST)',
             'health': '/health (GET)'
@@ -333,6 +329,8 @@ if __name__ == '__main__':
     logger.info(f"🔗 Вебхук URL: {webhook_url}")
     logger.info(f"🌐 WordPress URL: {WP_URL}")
     logger.info(f"👤 WordPress Username: {WP_USERNAME}")
+    logger.info(f"📝 Тип записи: news (Новости)")
+    logger.info(f"📌 Статус: draft (Черновик)")
     
     # Настройка вебхука
     async def setup():
