@@ -112,16 +112,18 @@ async def handle_channel_post(update: Update, context):
     """Асинхронная обработка постов из канала"""
     try:
         logger.info("=" * 60)
-        logger.info("🔍 НОВЫЙ ПОСТ ПОЛУЧЕН")
+        logger.info("🔍 ОБРАБОТЧИК ВЫЗВАН!")
         
         channel_post = update.channel_post
         if not channel_post:
             logger.warning("⚠️ Нет channel_post в update")
+            logger.info(f"Тип update: {update}")
             return
         
         real_chat_id = channel_post.chat_id
         logger.info(f"📨 ID сообщения: {channel_post.message_id}")
-        logger.info(f"🔍 ID канала: {real_chat_id}")
+        logger.info(f"🔍 Реальный ID канала: {real_chat_id}")
+        logger.info(f"🔍 CHANNEL_ID из переменной: {CHANNEL_ID}")
         
         text = channel_post.caption or channel_post.text or ""
         title, content_text = extract_title_and_content(text)
@@ -175,6 +177,7 @@ async def handle_channel_post(update: Update, context):
         
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
+        logger.exception("Детали:")
 
 async def handle_button(update: Update, context):
     """Обработка нажатия на кнопку"""
@@ -226,14 +229,14 @@ async def handle_button(update: Update, context):
 # Создаем приложение
 application = Application.builder().token(TELEGRAM_TOKEN).build()
 
-# Добавляем обработчики
+# ВРЕМЕННО УБРАЛИ ФИЛЬТР КАНАЛА - для отладки
 application.add_handler(MessageHandler(
-    filters.Chat(chat_id=CHANNEL_ID) & (filters.TEXT | filters.PHOTO | filters.CAPTION),
+    filters.ALL,  # Обрабатываем ВСЕ сообщения
     handle_channel_post
 ))
 application.add_handler(CallbackQueryHandler(handle_button))
 
-logger.info("✅ Обработчики добавлены")
+logger.info("✅ Обработчики добавлены (фильтр: ALL)")
 
 wp_session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
 
@@ -243,7 +246,6 @@ def webhook():
         json_data = request.get_json(force=True)
         logger.info("🔔 Вебхук получен")
         update = Update.de_json(json_data, application.bot)
-        # Запускаем обработку в отдельном event loop
         asyncio.run(application.process_update(update))
         return jsonify({'status': 'ok'})
     except Exception as e:
@@ -264,11 +266,11 @@ if __name__ == '__main__':
     
     logger.info(f"🚀 Запуск бота...")
     logger.info(f"🔗 Вебхук: {webhook_url}")
-    logger.info(f"📢 Канал: {CHANNEL_ID}")
+    logger.info(f"📢 Канал в переменной: {CHANNEL_ID}")
     if YOUR_ID:
         logger.info(f"👤 Твой ID: {YOUR_ID}")
     else:
-        logger.warning("⚠️ YOUR_TELEGRAM_ID не задан! Бот не сможет отправить кнопки.")
+        logger.warning("⚠️ YOUR_TELEGRAM_ID не задан!")
     
     async def setup():
         await application.initialize()
