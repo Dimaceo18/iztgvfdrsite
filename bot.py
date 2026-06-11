@@ -5,8 +5,8 @@ import re
 import time
 import asyncio
 from flask import Flask, request, jsonify
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
-from telegram.ext import Application, MessageHandler, filters, CallbackQueryHandler
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram.ext import Application, MessageHandler, filters, ConversationHandler
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -20,7 +20,10 @@ CHANNEL_ID = os.getenv('CHANNEL_ID')
 WP_URL = os.getenv('WP_URL')
 WP_USERNAME = os.getenv('WP_USERNAME')
 WP_PASSWORD = os.getenv('WP_PASSWORD')
-YOUR_ID = os.getenv('YOUR_TELEGRAM_ID')
+ADMIN_ID = os.getenv('YOUR_TELEGRAM_ID')
+
+# Состояния для ConversationHandler
+WAITING_FOR_ACTION = 1
 
 # WordPress API
 WP_API_URL = f"{WP_URL}/wp-json/wp/v2"
@@ -28,7 +31,6 @@ WP_MEDIA_URL = f"{WP_URL}/wp-json/wp/v2/media"
 
 app = Flask(__name__)
 wp_session = requests.Session()
-bot = Bot(token=TELEGRAM_TOKEN)
 
 # Хранилище временных постов
 pending_posts = {}
@@ -109,29 +111,23 @@ def create_wp_post(title, content, media_id=None, status='draft'):
         return False, None
 
 async def handle_channel_post(update: Update, context):
+    """Получаем пост из канала"""
     try:
-        logger.info("=" * 60)
-        logger.info("🔍 НОВЫЙ ПОСТ ПОЛУЧЕН")
-        
         channel_post = update.channel_post
         if not channel_post:
             return
         
-        real_chat_id = channel_post.chat_id
-        logger.info(f"📨 ID сообщения: {channel_post.message_id}")
-        logger.info(f"🔍 ID канала: {real_chat_id}")
+        logger.info(f"📨 Получен пост из канала: {channel_post.message_id}")
         
         text = channel_post.caption or channel_post.text or ""
         title, content_text = extract_title_and_content(text)
-        logger.info(f"📌 Заголовок: {title[:60]}...")
         
-        # Обработка фото
         media_id = None
         if channel_post.photo:
             photo = channel_post.photo[-1]
             media_id = download_and_upload_photo(photo.file_id)
             if media_id:
-                logger.info(f"✅ Фото загружено, ID: {media_id}")
+                logger.info(f"✅ Фото загружено")
         
         formatted_content = format_content_for_wp(content_text)
         
@@ -143,59 +139,64 @@ async def handle_channel_post(update: Update, context):
             'media_id': media_id
         }
         
-        # Кнопки
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("📝 В Черновики", callback_data=f"draft_{post_key}"),
-                InlineKeyboardButton("🚀 Опубликовать", callback_data=f"publish_{post_key}")
+        # Отправляем админу сообщение с кнопками выбора
+        if ADMIN_ID:
+            reply_keyboard = [
+                [KeyboardButton("📝 В Черновики"), KeyboardButton("🚀 Опубликовать")]
             ]
-        ])
-        
-        msg = f"📢 <b>Новый пост из канала!</b>\n\n"
-        msg += f"<b>Заголовок:</b> {title[:100]}\n"
-        msg += f"<b>Текст:</b> {content_text[:150]}...\n" if len(content_text) > 150 else f"<b>Текст:</b> {content_text}\n"
-        msg += f"<b>Фото:</b> {'✅ есть' if media_id else '❌ нет'}\n\n"
-        msg += f"<i>Выбери действие:</i>"
-        
-        # ИСПРАВЛЕНИЕ: используем синхронный bot.send_message
-        if YOUR_ID:
-            try:
-                bot.send_message(
-                    chat_id=YOUR_ID,
-                    text=msg,
-                    parse_mode='HTML',
-                    reply_markup=keyboard
-                )
-                logger.info(f"✉️ Отправлен запрос в личный диалог")
-            except Exception as e:
-                logger.error(f"Ошибка отправки сообщения: {e}")
-        
-        logger.info("=" * 60)
-        
+            markup = ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True, one_time_keyboard=True)
+            
+            msg = f"📢 <b>Новый пост из канала!</b>\n\n"
+            msg += f"<b>Заголовок:</b> {title[:100]}\n"
+            msg += f"<b>Текст:</b> {content_text[:150]}...\n" if len(content_text) > 150 else f"<b>Текст:</b> {content_text}\n"
+            msg += f"<b>Фото:</b> {'✅ есть' if media_id else '❌ нет'}\n\n"
+            msg += f"<i>Выбери действие:</i>"
+            
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=msg,
+                parse_mode='HTML',
+                reply_markup=markup
+            )
+            
+            # Сохраняем post_key в context.user_data
+            context.user_data['current_post_key'] = post_key
+            logger.info(f"✉️ Отправлен запрос админу")
+            
     except Exception as e:
-        logger.error(f"❌ Ошибка: {e}")
+        logger.error(f"Ошибка: {e}")
 
-async def handle_button(update: Update, context):
-    query = update.callback_query
-    await query.answer()
+async def handle_admin_reply(update: Update, context):
+    """Обрабатываем ответ админа (выбор действия)"""
+    text = update.message.text
+    user_id = update.effective_user.id
     
-    action, post_key = query.data.split('_')
+    # Проверяем, что это админ
+    if str(user_id) != ADMIN_ID:
+        return
+    
+    post_key = context.user_data.get('current_post_key')
+    if not post_key:
+        await update.message.reply_text("❌ Нет активного поста для публикации.")
+        return
     
     post_data = pending_posts.get(post_key)
     if not post_data:
-        await query.edit_message_text("❌ Пост не найден")
+        await update.message.reply_text("❌ Пост не найден.")
         return
     
-    if action == 'draft':
+    if text == "📝 В Черновики":
         status = 'draft'
         status_text = "сохранен в Черновики"
-        result_text = "📝 Пост сохранен в <b>Черновики</b>"
-    else:
+        result_text = "📝 Пост сохранен в Черновики"
+    elif text == "🚀 Опубликовать":
         status = 'publish'
-        status_text = "опубликован на сайте"
-        result_text = "🚀 Пост <b>опубликован</b> на сайте"
+        status_text = "опубликован"
+        result_text = "🚀 Пост опубликован на сайте"
+    else:
+        return
     
-    await query.edit_message_text(f"⏳ {status_text}...")
+    await update.message.reply_text(f"⏳ {status_text}...")
     
     success, link = create_wp_post(
         post_data['title'],
@@ -205,31 +206,37 @@ async def handle_button(update: Update, context):
     )
     
     if success:
-        await query.edit_message_text(
-            f"✅ <b>Готово!</b>\n\n"
-            f"{result_text}\n\n"
+        await update.message.reply_text(
+            f"✅ {result_text}!\n\n"
             f"<b>Ссылка:</b> {link}",
             parse_mode='HTML'
         )
-        logger.info(f"✅ Пост {status_text}")
+        logger.info(f"✅ Пост {status_text}: {post_data['title'][:50]}")
     else:
-        await query.edit_message_text(
-            f"❌ <b>Ошибка!</b>\n\nНе удалось {status_text} пост.",
-            parse_mode='HTML'
-        )
+        await update.message.reply_text(f"❌ Ошибка! Не удалось {status_text} пост.")
         logger.error(f"❌ Ошибка при создании поста")
     
+    # Очищаем кнопки
+    await update.message.reply_text("Готово!", reply_markup=ReplyKeyboardMarkup([[]], resize_keyboard=True))
+    
+    # Удаляем пост из хранилища
     del pending_posts[post_key]
+    del context.user_data['current_post_key']
 
 # Создаем приложение
 application = Application.builder().token(TELEGRAM_TOKEN).build()
 
-# Добавляем обработчики
+# Обработчик постов из канала
 application.add_handler(MessageHandler(
     filters.Chat(chat_id=CHANNEL_ID) & (filters.TEXT | filters.PHOTO | filters.CAPTION),
     handle_channel_post
 ))
-application.add_handler(CallbackQueryHandler(handle_button))
+
+# Обработчик ответов админа
+application.add_handler(MessageHandler(
+    filters.TEXT & filters.User(user_id=int(ADMIN_ID)) if ADMIN_ID else filters.ALL,
+    handle_admin_reply
+))
 
 logger.info("✅ Обработчики добавлены")
 
@@ -261,9 +268,6 @@ if __name__ == '__main__':
     
     logger.info(f"🚀 Запуск бота...")
     logger.info(f"🔗 Вебхук: {webhook_url}")
-    logger.info(f"📢 Канал: {CHANNEL_ID}")
-    if YOUR_ID:
-        logger.info(f"👤 Твой ID: {YOUR_ID}")
     
     async def setup():
         await application.initialize()
