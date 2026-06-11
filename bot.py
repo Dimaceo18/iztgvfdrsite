@@ -109,21 +109,17 @@ def create_wp_post(title, content, media_id=None, status='draft'):
         return False, None
 
 async def handle_channel_post(update: Update, context):
-    """Асинхронная обработка постов из канала"""
     try:
         logger.info("=" * 60)
-        logger.info("🔍 ОБРАБОТЧИК ВЫЗВАН!")
+        logger.info("🔍 НОВЫЙ ПОСТ ПОЛУЧЕН")
         
         channel_post = update.channel_post
         if not channel_post:
-            logger.warning("⚠️ Нет channel_post в update")
-            logger.info(f"Тип update: {update}")
             return
         
         real_chat_id = channel_post.chat_id
         logger.info(f"📨 ID сообщения: {channel_post.message_id}")
-        logger.info(f"🔍 Реальный ID канала: {real_chat_id}")
-        logger.info(f"🔍 CHANNEL_ID из переменной: {CHANNEL_ID}")
+        logger.info(f"🔍 ID канала: {real_chat_id}")
         
         text = channel_post.caption or channel_post.text or ""
         title, content_text = extract_title_and_content(text)
@@ -161,26 +157,25 @@ async def handle_channel_post(update: Update, context):
         msg += f"<b>Фото:</b> {'✅ есть' if media_id else '❌ нет'}\n\n"
         msg += f"<i>Выбери действие:</i>"
         
-        # Отправляем в личку
+        # ИСПРАВЛЕНИЕ: используем синхронный bot.send_message
         if YOUR_ID:
-            await context.bot.send_message(
-                chat_id=YOUR_ID,
-                text=msg,
-                parse_mode='HTML',
-                reply_markup=keyboard
-            )
-            logger.info(f"✉️ Отправлен запрос в личный диалог")
-        else:
-            logger.warning("⚠️ YOUR_TELEGRAM_ID не задан!")
+            try:
+                bot.send_message(
+                    chat_id=YOUR_ID,
+                    text=msg,
+                    parse_mode='HTML',
+                    reply_markup=keyboard
+                )
+                logger.info(f"✉️ Отправлен запрос в личный диалог")
+            except Exception as e:
+                logger.error(f"Ошибка отправки сообщения: {e}")
         
         logger.info("=" * 60)
         
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
-        logger.exception("Детали:")
 
 async def handle_button(update: Update, context):
-    """Обработка нажатия на кнопку"""
     query = update.callback_query
     await query.answer()
     
@@ -229,14 +224,14 @@ async def handle_button(update: Update, context):
 # Создаем приложение
 application = Application.builder().token(TELEGRAM_TOKEN).build()
 
-# ВРЕМЕННО УБРАЛИ ФИЛЬТР КАНАЛА - для отладки
+# Добавляем обработчики
 application.add_handler(MessageHandler(
-    filters.ALL,  # Обрабатываем ВСЕ сообщения
+    filters.Chat(chat_id=CHANNEL_ID) & (filters.TEXT | filters.PHOTO | filters.CAPTION),
     handle_channel_post
 ))
 application.add_handler(CallbackQueryHandler(handle_button))
 
-logger.info("✅ Обработчики добавлены (фильтр: ALL)")
+logger.info("✅ Обработчики добавлены")
 
 wp_session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
 
@@ -266,11 +261,9 @@ if __name__ == '__main__':
     
     logger.info(f"🚀 Запуск бота...")
     logger.info(f"🔗 Вебхук: {webhook_url}")
-    logger.info(f"📢 Канал в переменной: {CHANNEL_ID}")
+    logger.info(f"📢 Канал: {CHANNEL_ID}")
     if YOUR_ID:
         logger.info(f"👤 Твой ID: {YOUR_ID}")
-    else:
-        logger.warning("⚠️ YOUR_TELEGRAM_ID не задан!")
     
     async def setup():
         await application.initialize()
