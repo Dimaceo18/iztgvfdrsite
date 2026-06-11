@@ -5,8 +5,8 @@ import re
 import time
 import asyncio
 from flask import Flask, request, jsonify
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
-from telegram.ext import Application, MessageHandler, filters, ConversationHandler
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, MessageHandler, filters, CallbackQueryHandler
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -20,10 +20,7 @@ CHANNEL_ID = os.getenv('CHANNEL_ID')
 WP_URL = os.getenv('WP_URL')
 WP_USERNAME = os.getenv('WP_USERNAME')
 WP_PASSWORD = os.getenv('WP_PASSWORD')
-ADMIN_ID = os.getenv('YOUR_TELEGRAM_ID')
-
-# Состояния для ConversationHandler
-WAITING_FOR_ACTION = 1
+ADMIN_ID = os.getenv('YOUR_TELEGRAM_ID')  # Твой Telegram ID
 
 # WordPress API
 WP_API_URL = f"{WP_URL}/wp-json/wp/v2"
@@ -36,6 +33,7 @@ wp_session = requests.Session()
 pending_posts = {}
 
 def extract_title_and_content(text):
+    """Извлечение заголовка из текста"""
     if not text:
         return "Новый пост", ""
     lines = text.strip().split('\n')
@@ -46,6 +44,7 @@ def extract_title_and_content(text):
     return title, content
 
 def format_content_for_wp(text):
+    """Форматирование контента для WordPress"""
     if not text:
         return ""
     paragraphs = text.split('\n')
@@ -60,6 +59,7 @@ def format_content_for_wp(text):
     return '\n'.join(formatted)
 
 def download_and_upload_photo(file_id):
+    """Загрузка фото в WordPress"""
     try:
         get_file_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile"
         file_response = requests.get(get_file_url, params={'file_id': file_id}, timeout=30)
@@ -86,6 +86,7 @@ def download_and_upload_photo(file_id):
     return None
 
 def create_wp_post(title, content, media_id=None, status='draft'):
+    """Создание поста в WordPress"""
     post_data = {
         'title': title,
         'content': content,
@@ -110,93 +111,156 @@ def create_wp_post(title, content, media_id=None, status='draft'):
         logger.error(f"Ошибка: {e}")
         return False, None
 
+async def send_post_to_admin(context, title, content, media_id, source_id):
+    """Отправка поста админу на утверждение"""
+    post_key = str(int(time.time() * 1000))  # Уникальный ключ
+    pending_posts[post_key] = {
+        'title': title,
+        'content': content,
+        'media_id': media_id,
+        'source_id': source_id
+    }
+    
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📝 В Черновики", callback_data=f"draft_{post_key}"),
+            InlineKeyboardButton("🚀 Опубликовать", callback_data=f"publish_{post_key}")
+        ]
+    ])
+    
+    msg = f"📢 <b>Новый пост для публикации!</b>\n\n"
+    msg += f"<b>Заголовок:</b> {title[:100]}\n"
+    msg += f"<b>Текст:</b> {content[:150]}...\n" if len(content) > 150 else f"<b>Текст:</b> {content}\n"
+    msg += f"<b>Фото:</b> {'✅ есть' if media_id else '❌ нет'}\n\n"
+    msg += f"<i>Выбери действие:</i>"
+    
+    if ADMIN_ID:
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=msg,
+            parse_mode='HTML',
+            reply_markup=keyboard
+        )
+        logger.info(f"✉️ Отправлен запрос админу")
+        return True
+    return False
+
 async def handle_channel_post(update: Update, context):
-    """Получаем пост из канала"""
+    """Обработка постов из канала"""
     try:
         channel_post = update.channel_post
         if not channel_post:
             return
         
-        logger.info(f"📨 Получен пост из канала: {channel_post.message_id}")
+        # Проверяем ID канала
+        if str(channel_post.chat_id) != CHANNEL_ID:
+            logger.warning(f"⚠️ Не тот канал: {channel_post.chat_id}")
+            return
         
+        logger.info(f"📨 Получен пост из канала: ID {channel_post.message_id}")
+        
+        # Извлекаем текст
         text = channel_post.caption or channel_post.text or ""
         title, content_text = extract_title_and_content(text)
+        logger.info(f"📌 Заголовок: {title[:50]}...")
         
+        # Обработка фото
         media_id = None
         if channel_post.photo:
             photo = channel_post.photo[-1]
             media_id = download_and_upload_photo(photo.file_id)
             if media_id:
-                logger.info(f"✅ Фото загружено")
+                logger.info(f"📸 Фото загружено, ID: {media_id}")
         
         formatted_content = format_content_for_wp(content_text)
         
-        # Сохраняем во временное хранилище
-        post_key = str(channel_post.message_id)
-        pending_posts[post_key] = {
-            'title': title,
-            'content': formatted_content,
-            'media_id': media_id
-        }
+        # Отправляем админу на утверждение
+        await send_post_to_admin(context, title, formatted_content, media_id, f"channel_{channel_post.message_id}")
         
-        # Отправляем админу сообщение с кнопками выбора
-        if ADMIN_ID:
-            reply_keyboard = [
-                [KeyboardButton("📝 В Черновики"), KeyboardButton("🚀 Опубликовать")]
-            ]
-            markup = ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True, one_time_keyboard=True)
-            
-            msg = f"📢 <b>Новый пост из канала!</b>\n\n"
-            msg += f"<b>Заголовок:</b> {title[:100]}\n"
-            msg += f"<b>Текст:</b> {content_text[:150]}...\n" if len(content_text) > 150 else f"<b>Текст:</b> {content_text}\n"
-            msg += f"<b>Фото:</b> {'✅ есть' if media_id else '❌ нет'}\n\n"
-            msg += f"<i>Выбери действие:</i>"
-            
-            await context.bot.send_message(
-                chat_id=ADMIN_ID,
-                text=msg,
-                parse_mode='HTML',
-                reply_markup=markup
-            )
-            
-            # Сохраняем post_key в context.user_data
-            context.user_data['current_post_key'] = post_key
-            logger.info(f"✉️ Отправлен запрос админу")
-            
     except Exception as e:
-        logger.error(f"Ошибка: {e}")
+        logger.error(f"❌ Ошибка: {e}")
 
-async def handle_admin_reply(update: Update, context):
-    """Обрабатываем ответ админа (выбор действия)"""
-    text = update.message.text
-    user_id = update.effective_user.id
+async def handle_private_message(update: Update, context):
+    """Обработка репостов в личку бота"""
+    try:
+        message = update.message
+        if not message:
+            return
+        
+        # Проверяем, что сообщение от админа
+        if str(message.from_user.id) != ADMIN_ID:
+            logger.warning(f"⚠️ Сообщение не от админа: {message.from_user.id}")
+            await message.reply_text("❌ У вас нет прав для использования этого бота.")
+            return
+        
+        # Проверяем, есть ли репост
+        forward_from = message.forward_from
+        forward_from_chat = message.forward_from_chat
+        
+        text = message.caption or message.text or ""
+        
+        # Если это репост из канала или чата
+        if forward_from_chat:
+            logger.info(f"📨 Получен репост из чата: {forward_from_chat.id}")
+            # У репостов текст может быть в caption или text
+            if message.caption:
+                text = message.caption
+            elif message.text:
+                text = message.text
+        elif forward_from:
+            logger.info(f"📨 Получен репост от пользователя: {forward_from.id}")
+        else:
+            # Обычное сообщение с текстом
+            logger.info(f"📨 Получено текстовое сообщение")
+        
+        if not text:
+            await message.reply_text("❌ Не удалось извлечь текст из репоста.")
+            return
+        
+        # Извлекаем заголовок и контент
+        title, content_text = extract_title_and_content(text)
+        logger.info(f"📌 Заголовок: {title[:50]}...")
+        
+        # Обработка фото (если есть)
+        media_id = None
+        if message.photo:
+            photo = message.photo[-1]
+            media_id = download_and_upload_photo(photo.file_id)
+            if media_id:
+                logger.info(f"📸 Фото загружено, ID: {media_id}")
+        
+        formatted_content = format_content_for_wp(content_text)
+        
+        # Отправляем админу на утверждение (в данном случае самому себе)
+        await send_post_to_admin(context, title, formatted_content, media_id, f"private_{message.message_id}")
+        
+        await message.reply_text("✅ Пост отправлен на утверждение! Скоро придут кнопки.")
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка: {e}")
+
+async def handle_button(update: Update, context):
+    """Обработка нажатия на кнопку"""
+    query = update.callback_query
+    await query.answer()
     
-    # Проверяем, что это админ
-    if str(user_id) != ADMIN_ID:
-        return
-    
-    post_key = context.user_data.get('current_post_key')
-    if not post_key:
-        await update.message.reply_text("❌ Нет активного поста для публикации.")
-        return
+    action, post_key = query.data.split('_')
     
     post_data = pending_posts.get(post_key)
     if not post_data:
-        await update.message.reply_text("❌ Пост не найден.")
+        await query.edit_message_text("❌ Пост не найден")
         return
     
-    if text == "📝 В Черновики":
+    if action == 'draft':
         status = 'draft'
         status_text = "сохранен в Черновики"
-        result_text = "📝 Пост сохранен в Черновики"
-    elif text == "🚀 Опубликовать":
+        result_text = "📝 Пост сохранен в <b>Черновики</b>"
+    else:
         status = 'publish'
         status_text = "опубликован"
-        result_text = "🚀 Пост опубликован на сайте"
-    else:
-        return
+        result_text = "🚀 Пост <b>опубликован</b> на сайте"
     
-    await update.message.reply_text(f"⏳ {status_text}...")
+    await query.edit_message_text(f"⏳ {status_text}...")
     
     success, link = create_wp_post(
         post_data['title'],
@@ -206,37 +270,35 @@ async def handle_admin_reply(update: Update, context):
     )
     
     if success:
-        await update.message.reply_text(
-            f"✅ {result_text}!\n\n"
+        await query.edit_message_text(
+            f"✅ <b>Готово!</b>\n\n"
+            f"{result_text}\n\n"
             f"<b>Ссылка:</b> {link}",
             parse_mode='HTML'
         )
         logger.info(f"✅ Пост {status_text}: {post_data['title'][:50]}")
     else:
-        await update.message.reply_text(f"❌ Ошибка! Не удалось {status_text} пост.")
+        await query.edit_message_text(
+            f"❌ <b>Ошибка!</b>\n\nНе удалось {status_text} пост.",
+            parse_mode='HTML'
+        )
         logger.error(f"❌ Ошибка при создании поста")
     
-    # Очищаем кнопки
-    await update.message.reply_text("Готово!", reply_markup=ReplyKeyboardMarkup([[]], resize_keyboard=True))
-    
-    # Удаляем пост из хранилища
     del pending_posts[post_key]
-    del context.user_data['current_post_key']
 
 # Создаем приложение
 application = Application.builder().token(TELEGRAM_TOKEN).build()
 
-# Обработчик постов из канала
+# Добавляем обработчики
 application.add_handler(MessageHandler(
     filters.Chat(chat_id=CHANNEL_ID) & (filters.TEXT | filters.PHOTO | filters.CAPTION),
     handle_channel_post
 ))
-
-# Обработчик ответов админа
 application.add_handler(MessageHandler(
-    filters.TEXT & filters.User(user_id=int(ADMIN_ID)) if ADMIN_ID else filters.ALL,
-    handle_admin_reply
+    filters.PRIVATE & (filters.TEXT | filters.PHOTO | filters.CAPTION | filters.FORWARDED),
+    handle_private_message
 ))
+application.add_handler(CallbackQueryHandler(handle_button))
 
 logger.info("✅ Обработчики добавлены")
 
@@ -266,8 +328,10 @@ if __name__ == '__main__':
     render_url = os.getenv('RENDER_EXTERNAL_URL')
     webhook_url = f"{render_url}/webhook"
     
-    logger.info(f"🚀 Запуск бота...")
+    logger.info(f"🚀 ЗАПУСК БОТА...")
     logger.info(f"🔗 Вебхук: {webhook_url}")
+    logger.info(f"📢 ID канала: {CHANNEL_ID}")
+    logger.info(f"👤 ID админа: {ADMIN_ID}")
     
     async def setup():
         await application.initialize()
