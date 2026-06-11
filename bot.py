@@ -19,7 +19,7 @@ TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 WP_URL = os.getenv('WP_URL')
 WP_USERNAME = os.getenv('WP_USERNAME')
 WP_PASSWORD = os.getenv('WP_PASSWORD')
-ADMIN_ID = os.getenv('YOUR_TELEGRAM_ID')  # Твой Telegram ID
+ADMIN_ID = os.getenv('YOUR_TELEGRAM_ID')
 
 # WordPress API
 WP_API_URL = f"{WP_URL}/wp-json/wp/v2"
@@ -108,7 +108,6 @@ def download_and_upload_photo(file_id):
             
     except requests.exceptions.Timeout:
         logger.error("Таймаут при загрузке фото")
-        logger.error("💡 Хостинг блокирует запросы из Render. Нужно разблокировать IP.")
         return None
     except Exception as e:
         logger.error(f"Ошибка фото: {e}")
@@ -140,15 +139,7 @@ def create_wp_post(title, content, media_id=None, status='draft'):
             return True, link
         else:
             logger.error(f"Ошибка {response.status_code}: {response.text[:200]}")
-            if response.status_code == 401:
-                logger.error("❌ Ошибка авторизации! Проверь логин и пароль приложения")
-            elif response.status_code == 404:
-                logger.error("❌ API не найден. Проверь WP_URL и тип записи 'news'")
             return False, None
-    except requests.exceptions.Timeout:
-        logger.error("❌ Таймаут подключения к WordPress")
-        logger.error("💡 Хостинг блокирует запросы из Render. Обратись в поддержку хостинга.")
-        return False, None
     except Exception as e:
         logger.error(f"Ошибка: {e}")
         return False, None
@@ -158,7 +149,8 @@ async def handle_message(update: Update, context):
     try:
         message = update.message
         if not message or str(message.from_user.id) != ADMIN_ID:
-            await message.reply_text("❌ У вас нет прав для использования этого бота.")
+            if message:
+                await message.reply_text("❌ У вас нет прав для использования этого бота.")
             return
         
         logger.info(f"📨 Получено сообщение от админа")
@@ -218,7 +210,8 @@ async def handle_message(update: Update, context):
         
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
-        await message.reply_text("❌ Произошла ошибка при обработке сообщения.")
+        if message:
+            await message.reply_text("❌ Произошла ошибка при обработке сообщения.")
 
 async def handle_button(update: Update, context):
     """Обработка нажатия на кнопку"""
@@ -262,8 +255,7 @@ async def handle_button(update: Update, context):
         await query.edit_message_text(
             f"❌ <b>Ошибка!</b>\n\n"
             f"Не удалось {status_text} пост.\n\n"
-            f"💡 Проверьте подключение к WordPress.\n"
-            f"💡 Убедитесь, что хостинг не блокирует запросы.",
+            f"💡 Проверьте подключение к WordPress.",
             parse_mode='HTML'
         )
         logger.error(f"❌ Ошибка при создании поста")
@@ -312,9 +304,6 @@ if __name__ == '__main__':
     logger.info(f"🌐 WordPress: {WP_URL}")
     logger.info(f"📝 Тип записей: news")
     logger.info(f"👤 ID админа: {ADMIN_ID}")
-    
-    if not ADMIN_ID:
-        logger.warning("⚠️ YOUR_TELEGRAM_ID не задан! Бот не будет отвечать.")
     
     async def setup():
         await application.initialize()
