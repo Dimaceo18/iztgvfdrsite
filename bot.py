@@ -108,8 +108,8 @@ def create_wp_post(title, content, media_id=None, status='draft'):
         logger.error(f"Ошибка: {e}")
         return False, None
 
-def handle_channel_post(update: Update, context):
-    """Синхронная обработка постов из канала"""
+async def handle_channel_post(update: Update, context):
+    """Асинхронная обработка постов из канала"""
     try:
         logger.info("=" * 60)
         logger.info("🔍 НОВЫЙ ПОСТ ПОЛУЧЕН")
@@ -159,9 +159,9 @@ def handle_channel_post(update: Update, context):
         msg += f"<b>Фото:</b> {'✅ есть' if media_id else '❌ нет'}\n\n"
         msg += f"<i>Выбери действие:</i>"
         
-        # Отправляем синхронно
+        # Отправляем в личку
         if YOUR_ID:
-            bot.send_message(
+            await context.bot.send_message(
                 chat_id=YOUR_ID,
                 text=msg,
                 parse_mode='HTML',
@@ -176,16 +176,16 @@ def handle_channel_post(update: Update, context):
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
 
-def handle_button(update: Update, context):
+async def handle_button(update: Update, context):
     """Обработка нажатия на кнопку"""
     query = update.callback_query
-    query.answer()
+    await query.answer()
     
     action, post_key = query.data.split('_')
     
     post_data = pending_posts.get(post_key)
     if not post_data:
-        query.edit_message_text("❌ Пост не найден")
+        await query.edit_message_text("❌ Пост не найден")
         return
     
     if action == 'draft':
@@ -197,7 +197,7 @@ def handle_button(update: Update, context):
         status_text = "опубликован на сайте"
         result_text = "🚀 Пост <b>опубликован</b> на сайте"
     
-    query.edit_message_text(f"⏳ {status_text}...")
+    await query.edit_message_text(f"⏳ {status_text}...")
     
     success, link = create_wp_post(
         post_data['title'],
@@ -207,7 +207,7 @@ def handle_button(update: Update, context):
     )
     
     if success:
-        query.edit_message_text(
+        await query.edit_message_text(
             f"✅ <b>Готово!</b>\n\n"
             f"{result_text}\n\n"
             f"<b>Ссылка:</b> {link}",
@@ -215,7 +215,7 @@ def handle_button(update: Update, context):
         )
         logger.info(f"✅ Пост {status_text}")
     else:
-        query.edit_message_text(
+        await query.edit_message_text(
             f"❌ <b>Ошибка!</b>\n\nНе удалось {status_text} пост.",
             parse_mode='HTML'
         )
@@ -226,7 +226,7 @@ def handle_button(update: Update, context):
 # Создаем приложение
 application = Application.builder().token(TELEGRAM_TOKEN).build()
 
-# Добавляем обработчики (синхронные)
+# Добавляем обработчики
 application.add_handler(MessageHandler(
     filters.Chat(chat_id=CHANNEL_ID) & (filters.TEXT | filters.PHOTO | filters.CAPTION),
     handle_channel_post
@@ -243,7 +243,8 @@ def webhook():
         json_data = request.get_json(force=True)
         logger.info("🔔 Вебхук получен")
         update = Update.de_json(json_data, application.bot)
-        application.process_update(update)
+        # Запускаем обработку в отдельном event loop
+        asyncio.run(application.process_update(update))
         return jsonify({'status': 'ok'})
     except Exception as e:
         logger.error(f"Webhook error: {e}")
