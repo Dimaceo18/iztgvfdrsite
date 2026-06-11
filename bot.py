@@ -3,6 +3,7 @@ import requests
 import logging
 import re
 import time
+import asyncio
 from flask import Flask, request, jsonify
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
 from telegram.ext import Application, MessageHandler, filters, CallbackQueryHandler
@@ -167,6 +168,8 @@ def handle_channel_post(update: Update, context):
                 reply_markup=keyboard
             )
             logger.info(f"✉️ Отправлен запрос в личный диалог")
+        else:
+            logger.warning("⚠️ YOUR_TELEGRAM_ID не задан!")
         
         logger.info("=" * 60)
         
@@ -260,6 +263,11 @@ if __name__ == '__main__':
     
     logger.info(f"🚀 Запуск бота...")
     logger.info(f"🔗 Вебхук: {webhook_url}")
+    logger.info(f"📢 Канал: {CHANNEL_ID}")
+    if YOUR_ID:
+        logger.info(f"👤 Твой ID: {YOUR_ID}")
+    else:
+        logger.warning("⚠️ YOUR_TELEGRAM_ID не задан! Бот не сможет отправить кнопки.")
     
     async def setup():
         await application.initialize()
