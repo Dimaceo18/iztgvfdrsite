@@ -14,26 +14,24 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Конфигурация
+# --- Конфигурация ---
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 CHANNEL_ID = os.getenv('CHANNEL_ID')
 WP_URL = os.getenv('WP_URL')
 WP_USERNAME = os.getenv('WP_USERNAME')
 WP_PASSWORD = os.getenv('WP_PASSWORD')
-ADMIN_ID = os.getenv('YOUR_TELEGRAM_ID')  # Твой Telegram ID
+ADMIN_ID = os.getenv('YOUR_TELEGRAM_ID')
 
-# WordPress API
+# --- WordPress API ---
 WP_API_URL = f"{WP_URL}/wp-json/wp/v2"
 WP_MEDIA_URL = f"{WP_URL}/wp-json/wp/v2/media"
 
 app = Flask(__name__)
 wp_session = requests.Session()
-
-# Хранилище временных постов
 pending_posts = {}
 
+# --- Вспомогательные функции (без изменений) ---
 def extract_title_and_content(text):
-    """Извлечение заголовка из текста"""
     if not text:
         return "Новый пост", ""
     lines = text.strip().split('\n')
@@ -44,7 +42,6 @@ def extract_title_and_content(text):
     return title, content
 
 def format_content_for_wp(text):
-    """Форматирование контента для WordPress"""
     if not text:
         return ""
     paragraphs = text.split('\n')
@@ -59,7 +56,6 @@ def format_content_for_wp(text):
     return '\n'.join(formatted)
 
 def download_and_upload_photo(file_id):
-    """Загрузка фото в WordPress"""
     try:
         get_file_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile"
         file_response = requests.get(get_file_url, params={'file_id': file_id}, timeout=30)
@@ -86,7 +82,6 @@ def download_and_upload_photo(file_id):
     return None
 
 def create_wp_post(title, content, media_id=None, status='draft'):
-    """Создание поста в WordPress"""
     post_data = {
         'title': title,
         'content': content,
@@ -112,8 +107,7 @@ def create_wp_post(title, content, media_id=None, status='draft'):
         return False, None
 
 async def send_post_to_admin(context, title, content, media_id, source_id):
-    """Отправка поста админу на утверждение"""
-    post_key = str(int(time.time() * 1000))  # Уникальный ключ
+    post_key = str(int(time.time() * 1000))
     pending_posts[post_key] = {
         'title': title,
         'content': content,
@@ -145,26 +139,18 @@ async def send_post_to_admin(context, title, content, media_id, source_id):
         return True
     return False
 
+# --- Основные обработчики ---
 async def handle_channel_post(update: Update, context):
-    """Обработка постов из канала"""
     try:
         channel_post = update.channel_post
-        if not channel_post:
-            return
-        
-        # Проверяем ID канала
-        if str(channel_post.chat_id) != CHANNEL_ID:
-            logger.warning(f"⚠️ Не тот канал: {channel_post.chat_id}")
+        if not channel_post or str(channel_post.chat_id) != CHANNEL_ID:
             return
         
         logger.info(f"📨 Получен пост из канала: ID {channel_post.message_id}")
-        
-        # Извлекаем текст
         text = channel_post.caption or channel_post.text or ""
         title, content_text = extract_title_and_content(text)
         logger.info(f"📌 Заголовок: {title[:50]}...")
         
-        # Обработка фото
         media_id = None
         if channel_post.photo:
             photo = channel_post.photo[-1]
@@ -173,55 +159,26 @@ async def handle_channel_post(update: Update, context):
                 logger.info(f"📸 Фото загружено, ID: {media_id}")
         
         formatted_content = format_content_for_wp(content_text)
-        
-        # Отправляем админу на утверждение
         await send_post_to_admin(context, title, formatted_content, media_id, f"channel_{channel_post.message_id}")
-        
     except Exception as e:
-        logger.error(f"❌ Ошибка: {e}")
+        logger.error(f"❌ Ошибка в handle_channel_post: {e}")
 
 async def handle_private_message(update: Update, context):
-    """Обработка репостов в личку бота"""
     try:
         message = update.message
-        if not message:
+        if not message or str(message.from_user.id) != ADMIN_ID:
             return
         
-        # Проверяем, что сообщение от админа
-        if str(message.from_user.id) != ADMIN_ID:
-            logger.warning(f"⚠️ Сообщение не от админа: {message.from_user.id}")
-            await message.reply_text("❌ У вас нет прав для использования этого бота.")
-            return
-        
-        # Проверяем, есть ли репост
-        forward_from = message.forward_from
-        forward_from_chat = message.forward_from_chat
-        
+        logger.info(f"📨 Получено сообщение в личку от админа")
         text = message.caption or message.text or ""
         
-        # Если это репост из канала или чата
-        if forward_from_chat:
-            logger.info(f"📨 Получен репост из чата: {forward_from_chat.id}")
-            # У репостов текст может быть в caption или text
-            if message.caption:
-                text = message.caption
-            elif message.text:
-                text = message.text
-        elif forward_from:
-            logger.info(f"📨 Получен репост от пользователя: {forward_from.id}")
-        else:
-            # Обычное сообщение с текстом
-            logger.info(f"📨 Получено текстовое сообщение")
-        
-        if not text:
-            await message.reply_text("❌ Не удалось извлечь текст из репоста.")
+        if not text and not message.photo:
+            await message.reply_text("❌ Отправьте текст или фото с подписью.")
             return
         
-        # Извлекаем заголовок и контент
         title, content_text = extract_title_and_content(text)
         logger.info(f"📌 Заголовок: {title[:50]}...")
         
-        # Обработка фото (если есть)
         media_id = None
         if message.photo:
             photo = message.photo[-1]
@@ -230,78 +187,53 @@ async def handle_private_message(update: Update, context):
                 logger.info(f"📸 Фото загружено, ID: {media_id}")
         
         formatted_content = format_content_for_wp(content_text)
-        
-        # Отправляем админу на утверждение (в данном случае самому себе)
         await send_post_to_admin(context, title, formatted_content, media_id, f"private_{message.message_id}")
-        
-        await message.reply_text("✅ Пост отправлен на утверждение! Скоро придут кнопки.")
-        
+        await message.reply_text("✅ Пост отправлен на утверждение!")
     except Exception as e:
-        logger.error(f"❌ Ошибка: {e}")
+        logger.error(f"❌ Ошибка в handle_private_message: {e}")
 
 async def handle_button(update: Update, context):
-    """Обработка нажатия на кнопку"""
     query = update.callback_query
     await query.answer()
     
     action, post_key = query.data.split('_')
-    
     post_data = pending_posts.get(post_key)
+    
     if not post_data:
         await query.edit_message_text("❌ Пост не найден")
         return
     
-    if action == 'draft':
-        status = 'draft'
-        status_text = "сохранен в Черновики"
-        result_text = "📝 Пост сохранен в <b>Черновики</b>"
-    else:
-        status = 'publish'
-        status_text = "опубликован"
-        result_text = "🚀 Пост <b>опубликован</b> на сайте"
+    status = 'publish' if action == 'publish' else 'draft'
+    status_text = "опубликован" if action == 'publish' else "сохранен в Черновики"
+    result_text = "🚀 Пост опубликован на сайте" if action == 'publish' else "📝 Пост сохранен в Черновики"
     
     await query.edit_message_text(f"⏳ {status_text}...")
-    
-    success, link = create_wp_post(
-        post_data['title'],
-        post_data['content'],
-        post_data['media_id'],
-        status
-    )
+    success, link = create_wp_post(post_data['title'], post_data['content'], post_data['media_id'], status)
     
     if success:
-        await query.edit_message_text(
-            f"✅ <b>Готово!</b>\n\n"
-            f"{result_text}\n\n"
-            f"<b>Ссылка:</b> {link}",
-            parse_mode='HTML'
-        )
+        await query.edit_message_text(f"✅ <b>Готово!</b>\n\n{result_text}\n\n<b>Ссылка:</b> {link}", parse_mode='HTML')
         logger.info(f"✅ Пост {status_text}: {post_data['title'][:50]}")
     else:
-        await query.edit_message_text(
-            f"❌ <b>Ошибка!</b>\n\nНе удалось {status_text} пост.",
-            parse_mode='HTML'
-        )
+        await query.edit_message_text(f"❌ <b>Ошибка!</b>\n\nНе удалось {status_text} пост.", parse_mode='HTML')
         logger.error(f"❌ Ошибка при создании поста")
     
     del pending_posts[post_key]
 
-# Создаем приложение
+# --- Настройка и запуск бота ---
 application = Application.builder().token(TELEGRAM_TOKEN).build()
 
-# Добавляем обработчики
 application.add_handler(MessageHandler(
     filters.Chat(chat_id=CHANNEL_ID) & (filters.TEXT | filters.PHOTO | filters.CAPTION),
     handle_channel_post
 ))
+# ИСПРАВЛЕННАЯ СТРОКА:
 application.add_handler(MessageHandler(
-    filters.PRIVATE & (filters.TEXT | filters.PHOTO | filters.CAPTION | filters.FORWARDED),
+    ~filters.ChatType.CHANNEL & (filters.TEXT | filters.PHOTO | filters.CAPTION),
     handle_private_message
 ))
 application.add_handler(CallbackQueryHandler(handle_button))
 
 logger.info("✅ Обработчики добавлены")
-
 wp_session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
 
 @app.route('/webhook', methods=['POST'])
