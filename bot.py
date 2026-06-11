@@ -3,9 +3,9 @@ import requests
 import logging
 import re
 import time
-import asyncio
+import json
 from flask import Flask, request, jsonify
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
 from telegram.ext import Application, MessageHandler, filters, CallbackQueryHandler
 from dotenv import load_dotenv
 
@@ -28,6 +28,9 @@ WP_MEDIA_URL = f"{WP_URL}/wp-json/wp/v2/media"
 app = Flask(__name__)
 wp_session = requests.Session()
 wp_session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
+
+# Создаём бота синхронно
+bot = Bot(token=TELEGRAM_TOKEN)
 
 # Хранилище временных постов
 pending_posts = {}
@@ -62,7 +65,7 @@ def format_content_for_wp(text):
     return '\n'.join(formatted)
 
 def download_and_upload_photo(file_id):
-    """Загрузка фото в WordPress"""
+    """Загрузка фото в WordPress (синхронно)"""
     try:
         # Получаем путь к файлу
         get_file = requests.get(
@@ -102,19 +105,14 @@ def download_and_upload_photo(file_id):
             return media_id
         else:
             logger.error(f"Ошибка WP: {wp_response.status_code}")
-            if wp_response.status_code == 401:
-                logger.error("❌ Ошибка авторизации! Проверь WP_USERNAME и WP_PASSWORD")
             return None
             
-    except requests.exceptions.Timeout:
-        logger.error("Таймаут при загрузке фото")
-        return None
     except Exception as e:
         logger.error(f"Ошибка фото: {e}")
         return None
 
 def create_wp_post(title, content, media_id=None, status='draft'):
-    """Создание поста в WordPress"""
+    """Создание поста в WordPress (синхронно)"""
     post_data = {
         'title': title,
         'content': content,
@@ -144,13 +142,11 @@ def create_wp_post(title, content, media_id=None, status='draft'):
         logger.error(f"Ошибка: {e}")
         return False, None
 
-async def handle_message(update: Update, context):
-    """Обработка сообщений от админа"""
+def handle_message(update: Update, context):
+    """Обработка сообщений от админа (синхронно)"""
     try:
-        message = update.message
+        message = update.effective_message
         if not message or str(message.from_user.id) != ADMIN_ID:
-            if message:
-                await message.reply_text("❌ У вас нет прав для использования этого бота.")
             return
         
         logger.info(f"📨 Получено сообщение от админа")
@@ -158,7 +154,7 @@ async def handle_message(update: Update, context):
         # Получаем текст и фото
         text = message.caption or message.text or ""
         if not text and not message.photo:
-            await message.reply_text("❌ Отправьте текст новости (можно с фото).\n\nПервая строка будет заголовком.")
+            bot.send_message(chat_id=ADMIN_ID, text="❌ Отправьте текст новости (можно с фото).\n\nПервая строка будет заголовком.")
             return
         
         # Извлекаем заголовок и контент
@@ -169,12 +165,12 @@ async def handle_message(update: Update, context):
         media_id = None
         if message.photo:
             photo = message.photo[-1]
-            await message.reply_text("⏳ Загружаю фото...")
+            bot.send_message(chat_id=ADMIN_ID, text="⏳ Загружаю фото...")
             media_id = download_and_upload_photo(photo.file_id)
             if media_id:
                 logger.info(f"✅ Фото загружено, ID: {media_id}")
             else:
-                await message.reply_text("⚠️ Фото не загрузилось, продолжу без фото.")
+                bot.send_message(chat_id=ADMIN_ID, text="⚠️ Фото не загрузилось, продолжу без фото.")
         
         # Форматируем контент
         formatted_content = format_content_for_wp(content_text)
@@ -196,45 +192,43 @@ async def handle_message(update: Update, context):
         ])
         
         # Отправляем сообщение с кнопками
-        msg = f"📢 <b>Новая новость!</b>\n\n"
-        msg += f"<b>Заголовок:</b> {title[:100]}\n"
-        msg += f"<b>Фото:</b> {'✅ есть' if media_id else '❌ нет'}\n\n"
-        msg += f"<i>Выбери действие:</i>"
+        msg = f"📢 Новая новость!\n\n"
+        msg += f"Заголовок: {title[:100]}\n"
+        msg += f"Фото: {'есть' if media_id else 'нет'}\n\n"
+        msg += f"Выбери действие:"
         
-        await message.reply_text(
-            msg,
-            parse_mode='HTML',
+        bot.send_message(
+            chat_id=ADMIN_ID,
+            text=msg,
             reply_markup=keyboard
         )
         logger.info(f"✉️ Отправлен запрос на публикацию")
         
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
-        if message:
-            await message.reply_text("❌ Произошла ошибка при обработке сообщения.")
 
-async def handle_button(update: Update, context):
-    """Обработка нажатия на кнопку"""
+def handle_button(update: Update, context):
+    """Обработка нажатия на кнопку (синхронно)"""
     query = update.callback_query
-    await query.answer()
+    query.answer()
     
     action, post_key = query.data.split('_')
     post_data = pending_posts.get(post_key)
     
     if not post_data:
-        await query.edit_message_text("❌ Пост не найден. Возможно, время ожидания истекло.")
+        query.edit_message_text("❌ Пост не найден.")
         return
     
     if action == 'draft':
         status = 'draft'
         status_text = "сохранен в Черновики"
-        result_text = "📝 Пост сохранен в <b>Черновики</b>"
+        result_text = "📝 Пост сохранен в Черновики"
     else:
         status = 'publish'
         status_text = "опубликован"
-        result_text = "🚀 Пост <b>опубликован</b> на сайте"
+        result_text = "🚀 Пост опубликован на сайте"
     
-    await query.edit_message_text(f"⏳ {status_text}...")
+    query.edit_message_text(f"⏳ {status_text}...")
     
     success, link = create_wp_post(
         post_data['title'],
@@ -244,19 +238,13 @@ async def handle_button(update: Update, context):
     )
     
     if success:
-        await query.edit_message_text(
-            f"✅ <b>Готово!</b>\n\n"
-            f"{result_text}\n\n"
-            f"<b>Ссылка:</b> {link}",
-            parse_mode='HTML'
+        query.edit_message_text(
+            f"✅ Готово!\n\n{result_text}\n\nСсылка: {link}"
         )
         logger.info(f"✅ Пост {status_text}: {post_data['title'][:50]}")
     else:
-        await query.edit_message_text(
-            f"❌ <b>Ошибка!</b>\n\n"
-            f"Не удалось {status_text} пост.\n\n"
-            f"💡 Проверьте подключение к WordPress.",
-            parse_mode='HTML'
+        query.edit_message_text(
+            f"❌ Ошибка!\n\nНе удалось {status_text} пост.\n\n💡 Проверьте подключение к WordPress."
         )
         logger.error(f"❌ Ошибка при создании поста")
     
@@ -266,7 +254,7 @@ async def handle_button(update: Update, context):
 # Создаем приложение
 application = Application.builder().token(TELEGRAM_TOKEN).build()
 
-# Обработчик личных сообщений
+# Добавляем обработчики (синхронные)
 application.add_handler(MessageHandler(
     filters.TEXT | filters.PHOTO | filters.CAPTION,
     handle_message
@@ -277,11 +265,12 @@ logger.info("✅ Обработчики добавлены")
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
+    """Обработка вебхука (синхронно)"""
     try:
         json_data = request.get_json(force=True)
         logger.info("🔔 Вебхук получен")
         update = Update.de_json(json_data, application.bot)
-        asyncio.run(application.process_update(update))
+        application.process_update(update)  # Синхронный вызов!
         return jsonify({'status': 'ok'})
     except Exception as e:
         logger.error(f"Webhook error: {e}")
@@ -305,13 +294,10 @@ if __name__ == '__main__':
     logger.info(f"📝 Тип записей: news")
     logger.info(f"👤 ID админа: {ADMIN_ID}")
     
-    async def setup():
-        await application.initialize()
-        await application.bot.delete_webhook()
-        await application.bot.set_webhook(url=webhook_url)
-        logger.info("✅ Вебхук установлен")
-    
-    asyncio.run(setup())
+    # Установка вебхука (синхронно)
+    bot.delete_webhook()
+    bot.set_webhook(url=webhook_url)
+    logger.info("✅ Вебхук установлен")
     
     port = int(os.getenv('PORT', 8000))
     app.run(host='0.0.0.0', port=port)
