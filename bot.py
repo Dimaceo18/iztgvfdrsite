@@ -39,7 +39,6 @@ pending_posts = {}
 TG_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 def tg_send_message(chat_id, text, reply_markup=None, parse_mode=None):
-    """Синхронная отправка сообщения в Telegram"""
     url = f"{TG_API_URL}/sendMessage"
     data = {'chat_id': chat_id, 'text': text}
     if reply_markup:
@@ -49,7 +48,6 @@ def tg_send_message(chat_id, text, reply_markup=None, parse_mode=None):
     return requests.post(url, json=data, timeout=30)
 
 def tg_edit_message_text(chat_id, message_id, text, reply_markup=None, parse_mode=None):
-    """Синхронное редактирование сообщения в Telegram"""
     url = f"{TG_API_URL}/editMessageText"
     data = {'chat_id': chat_id, 'message_id': message_id, 'text': text}
     if reply_markup:
@@ -59,12 +57,10 @@ def tg_edit_message_text(chat_id, message_id, text, reply_markup=None, parse_mod
     return requests.post(url, json=data, timeout=30)
 
 def tg_answer_callback_query(callback_id):
-    """Синхронный ответ на callback query"""
     url = f"{TG_API_URL}/answerCallbackQuery"
     return requests.post(url, json={'callback_query_id': callback_id}, timeout=30)
 
 def tg_send_photo(chat_id, photo_url, caption=None):
-    """Синхронная отправка фото"""
     url = f"{TG_API_URL}/sendPhoto"
     data = {'chat_id': chat_id, 'photo': photo_url}
     if caption:
@@ -73,7 +69,6 @@ def tg_send_photo(chat_id, photo_url, caption=None):
     return requests.post(url, json=data, timeout=60)
 
 def tg_send_video(chat_id, video_url, caption=None):
-    """Синхронная отправка видео"""
     url = f"{TG_API_URL}/sendVideo"
     data = {'chat_id': chat_id, 'video': video_url}
     if caption:
@@ -82,7 +77,6 @@ def tg_send_video(chat_id, video_url, caption=None):
     return requests.post(url, json=data, timeout=60)
 
 def process_text_with_deepseek(text):
-    """Обработка текста через DeepSeek API (синхронно)"""
     if not DEEPSEEK_API_KEY:
         return "❌ API ключ DeepSeek не настроен."
     
@@ -107,7 +101,6 @@ def process_text_with_deepseek(text):
         )
         if response.status_code == 200:
             result = response.json()["choices"][0]["message"]["content"]
-            # Очистка результата
             result = re.sub(r'^Вот обработанный новостной текст.*?:', '', result, flags=re.IGNORECASE)
             result = re.sub(r'^Вот.*?текст.*?:', '', result, flags=re.IGNORECASE)
             result = re.sub(r'^Вот.*?:', '', result, flags=re.IGNORECASE)
@@ -142,7 +135,8 @@ def format_content_for_wp(text):
             formatted.append(f'<p>{para}</p>')
     return '\n'.join(formatted)
 
-def download_and_upload_media(file_id, is_video=False):
+def upload_media_to_wp(file_id, is_video=False):
+    """Загрузка медиа в WordPress (только при публикации)"""
     try:
         get_file = requests.get(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile",
@@ -175,7 +169,7 @@ def download_and_upload_media(file_id, is_video=False):
         if wp_response.status_code == 201:
             return wp_response.json()['id']
     except Exception as e:
-        logger.error(f"Ошибка медиа: {e}")
+        logger.error(f"Ошибка загрузки медиа: {e}")
     return None
 
 def create_wp_post(title, content, media_id=None, status='draft'):
@@ -207,7 +201,6 @@ def create_wp_post(title, content, media_id=None, status='draft'):
 def publish_to_channel(chat_id, text, media_file_id=None, is_video=False):
     try:
         if media_file_id:
-            # Получаем файл для публикации
             get_file = requests.get(
                 f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile",
                 params={'file_id': media_file_id},
@@ -264,10 +257,14 @@ def webhook():
                     return jsonify({'status': 'ok'})
                 
                 new_title, new_content = extract_title_and_content(processed_text)
-                pending_posts[post_key]['title'] = new_title
-                pending_posts[post_key]['content'] = format_content_for_wp(new_content)
-                pending_posts[post_key]['processed_text'] = processed_text
+                post_data['title'] = new_title
+                post_data['content'] = format_content_for_wp(new_content)
+                post_data['processed_text'] = processed_text
                 
+                # Обновляем сообщение с новым текстом и медиа
+                tg_edit_message_text(chat_id, msg_id, "⏳ Обновляю сообщение...")
+                
+                # Отправляем новое сообщение с результатом
                 keyboard = {
                     "inline_keyboard": [
                         [{"text": "🔄 Переделать текст еще раз", "callback_data": f"reprocess_{post_key}"}],
@@ -279,9 +276,10 @@ def webhook():
                 msg = f"📢 <b>Новость после обработки ИИ</b>\n\n"
                 msg += f"<b>Заголовок:</b> {new_title}\n\n"
                 msg += f"<b>Текст:</b>\n{processed_text}\n\n"
-                msg += f"<b>Медиа:</b> {'✅ есть' if post_data['media_id'] else '❌ нет'}\n\n"
+                msg += f"<b>Медиа:</b> {'✅ есть' if post_data['raw_media_id'] else '❌ нет'}\n\n"
                 msg += f"<i>Выбери действие:</i>"
                 
+                # Отправляем новое сообщение вместо старого
                 tg_edit_message_text(chat_id, msg_id, msg, json.dumps(keyboard), 'HTML')
                 return jsonify({'status': 'ok'})
             
@@ -303,10 +301,20 @@ def webhook():
             # Публикация на сайт
             elif action == 'topublish':
                 tg_edit_message_text(chat_id, msg_id, "⏳ Публикую на сайт...")
+                
+                # Загружаем медиа в WordPress только сейчас
+                wp_media_id = None
+                if post_data.get('raw_media_id'):
+                    tg_edit_message_text(chat_id, msg_id, "⏳ Загружаю фото на сайт...")
+                    wp_media_id = upload_media_to_wp(
+                        post_data['raw_media_id'], 
+                        post_data.get('is_video', False)
+                    )
+                
                 success, link = create_wp_post(
                     post_data['title'],
                     post_data['content'],
-                    post_data['media_id'],
+                    wp_media_id,
                     'publish'
                 )
                 if success:
@@ -318,10 +326,20 @@ def webhook():
             # Черновик на сайте
             elif action == 'todraft':
                 tg_edit_message_text(chat_id, msg_id, "⏳ Сохраняю в черновики...")
+                
+                # Загружаем медиа в WordPress только сейчас
+                wp_media_id = None
+                if post_data.get('raw_media_id'):
+                    tg_edit_message_text(chat_id, msg_id, "⏳ Загружаю фото на сайт...")
+                    wp_media_id = upload_media_to_wp(
+                        post_data['raw_media_id'], 
+                        post_data.get('is_video', False)
+                    )
+                
                 success, link = create_wp_post(
                     post_data['title'],
                     post_data['content'],
-                    post_data['media_id'],
+                    wp_media_id,
                     'draft'
                 )
                 if success:
@@ -342,21 +360,16 @@ def webhook():
             
             original_text = message.get('caption') or message.get('text', '')
             
-            media_id = None
             raw_media_id = None
             is_video = False
             
             if 'photo' in message:
                 photo = message['photo'][-1]
                 raw_media_id = photo['file_id']
-                tg_send_message(chat_id, "⏳ Загружаю фото...")
-                media_id = download_and_upload_media(raw_media_id, is_video=False)
             elif 'video' in message:
                 video = message['video']
                 raw_media_id = video['file_id']
                 is_video = True
-                tg_send_message(chat_id, "⏳ Загружаю видео...")
-                media_id = download_and_upload_media(raw_media_id, is_video=True)
             
             if not original_text:
                 tg_send_message(chat_id, "❌ Отправьте текст новости.\nПервая строка будет заголовком.")
@@ -378,7 +391,6 @@ def webhook():
                 'content': formatted_content,
                 'processed_text': processed_text,
                 'original_text': original_text,
-                'media_id': media_id,
                 'raw_media_id': raw_media_id,
                 'is_video': is_video
             }
@@ -394,10 +406,16 @@ def webhook():
             msg = f"📢 <b>Новость после обработки ИИ</b>\n\n"
             msg += f"<b>Заголовок:</b> {title}\n\n"
             msg += f"<b>Текст:</b>\n{processed_text}\n\n"
-            msg += f"<b>Медиа:</b> {'✅ есть' if media_id else '❌ нет'}\n\n"
+            msg += f"<b>Медиа:</b> {'✅ есть' if raw_media_id else '❌ нет'}\n\n"
             msg += f"<i>Выбери действие:</i>"
             
-            tg_send_message(chat_id, msg, json.dumps(keyboard), 'HTML')
+            # Если есть медиа, отправляем вместе с ним
+            if raw_media_id:
+                # Сначала отправляем сообщение
+                tg_send_message(chat_id, msg, json.dumps(keyboard), 'HTML')
+            else:
+                tg_send_message(chat_id, msg, json.dumps(keyboard), 'HTML')
+            
             logger.info(f"✉️ Отправлен запрос на публикацию")
         
         return jsonify({'status': 'ok'})
@@ -423,7 +441,6 @@ if __name__ == '__main__':
     logger.info(f"📢 Канал: {CHANNEL_ID}")
     logger.info(f"🤖 DeepSeek: {'✅' if DEEPSEEK_API_KEY else '❌'}")
     
-    # Установка вебхука через requests
     requests.post(f"{TG_API_URL}/deleteWebhook")
     requests.post(f"{TG_API_URL}/setWebhook", json={'url': webhook_url})
     logger.info("✅ Вебхук установлен")
