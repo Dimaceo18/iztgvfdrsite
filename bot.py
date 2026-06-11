@@ -16,11 +16,10 @@ logger = logging.getLogger(__name__)
 
 # Конфигурация
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
-CHANNEL_ID = os.getenv('CHANNEL_ID')
 WP_URL = os.getenv('WP_URL')
 WP_USERNAME = os.getenv('WP_USERNAME')
 WP_PASSWORD = os.getenv('WP_PASSWORD')
-ADMIN_ID = os.getenv('YOUR_TELEGRAM_ID')
+ADMIN_ID = os.getenv('YOUR_TELEGRAM_ID')  # Твой Telegram ID
 
 # WordPress API
 WP_API_URL = f"{WP_URL}/wp-json/wp/v2"
@@ -30,9 +29,11 @@ app = Flask(__name__)
 wp_session = requests.Session()
 wp_session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
 
+# Хранилище временных постов
 pending_posts = {}
 
 def extract_title_and_content(text):
+    """Извлечение заголовка из текста (первая строка)"""
     if not text:
         return "Новый пост", ""
     lines = text.strip().split('\n')
@@ -43,6 +44,7 @@ def extract_title_and_content(text):
     return title, content
 
 def format_content_for_wp(text):
+    """Форматирование контента для WordPress с HTML тегами"""
     if not text:
         return ""
     paragraphs = text.split('\n')
@@ -50,31 +52,42 @@ def format_content_for_wp(text):
     for para in paragraphs:
         para = para.strip()
         if para:
+            # Конвертируем ссылки
             para = re.sub(r'(https?://[^\s]+)', r'<a href="\1">\1</a>', para)
+            # Конвертируем **жирный**
             para = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', para)
+            # Конвертируем *курсив*
             para = re.sub(r'\*(.+?)\*', r'<em>\1</em>', para)
             formatted.append(f'<p>{para}</p>')
     return '\n'.join(formatted)
 
 def download_and_upload_photo(file_id):
+    """Загрузка фото в WordPress"""
     try:
+        # Получаем путь к файлу
         get_file = requests.get(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile",
             params={'file_id': file_id},
             timeout=30
         )
         if get_file.status_code != 200:
+            logger.error(f"Ошибка getFile: {get_file.status_code}")
             return None
         
         file_path = get_file.json().get('result', {}).get('file_path')
         if not file_path:
+            logger.error("Не получен file_path")
             return None
         
+        # Скачиваем фото
         photo_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
+        logger.info(f"Скачивание фото...")
         photo_data = requests.get(photo_url, timeout=60)
         if photo_data.status_code != 200:
+            logger.error(f"Ошибка скачивания: {photo_data.status_code}")
             return None
         
+        # Загружаем в WordPress
         wp_response = wp_session.post(
             WP_MEDIA_URL,
             auth=(WP_USERNAME, WP_PASSWORD),
@@ -84,12 +97,25 @@ def download_and_upload_photo(file_id):
         )
         
         if wp_response.status_code == 201:
-            return wp_response.json()['id']
+            media_id = wp_response.json()['id']
+            logger.info(f"✅ Фото загружено, ID: {media_id}")
+            return media_id
+        else:
+            logger.error(f"Ошибка WP: {wp_response.status_code}")
+            if wp_response.status_code == 401:
+                logger.error("❌ Ошибка авторизации! Проверь WP_USERNAME и WP_PASSWORD")
+            return None
+            
+    except requests.exceptions.Timeout:
+        logger.error("Таймаут при загрузке фото")
+        logger.error("💡 Хостинг блокирует запросы из Render. Нужно разблокировать IP.")
+        return None
     except Exception as e:
         logger.error(f"Ошибка фото: {e}")
-    return None
+        return None
 
 def create_wp_post(title, content, media_id=None, status='draft'):
+    """Создание поста в WordPress"""
     post_data = {
         'title': title,
         'content': content,
@@ -100,6 +126,7 @@ def create_wp_post(title, content, media_id=None, status='draft'):
         post_data['featured_media'] = media_id
     
     try:
+        logger.info(f"📤 Отправка в WordPress (статус: {status})...")
         response = wp_session.post(
             f"{WP_API_URL}/news",
             auth=(WP_USERNAME, WP_PASSWORD),
@@ -108,85 +135,59 @@ def create_wp_post(title, content, media_id=None, status='draft'):
         )
         
         if response.status_code == 201:
-            return True, response.json()['link']
+            link = response.json()['link']
+            logger.info(f"✅ Пост создан: {link}")
+            return True, link
         else:
-            logger.error(f"Ошибка: {response.status_code}")
+            logger.error(f"Ошибка {response.status_code}: {response.text[:200]}")
+            if response.status_code == 401:
+                logger.error("❌ Ошибка авторизации! Проверь логин и пароль приложения")
+            elif response.status_code == 404:
+                logger.error("❌ API не найден. Проверь WP_URL и тип записи 'news'")
             return False, None
+    except requests.exceptions.Timeout:
+        logger.error("❌ Таймаут подключения к WordPress")
+        logger.error("💡 Хостинг блокирует запросы из Render. Обратись в поддержку хостинга.")
+        return False, None
     except Exception as e:
         logger.error(f"Ошибка: {e}")
         return False, None
 
-async def handle_channel_post(update: Update, context):
-    try:
-        channel_post = update.channel_post
-        if not channel_post or str(channel_post.chat_id) != CHANNEL_ID:
-            return
-        
-        logger.info(f"📨 Получен пост из канала")
-        text = channel_post.caption or channel_post.text or ""
-        title, content_text = extract_title_and_content(text)
-        
-        media_id = None
-        if channel_post.photo:
-            photo = channel_post.photo[-1]
-            media_id = download_and_upload_photo(photo.file_id)
-        
-        formatted_content = format_content_for_wp(content_text)
-        
-        post_key = str(channel_post.message_id)
-        pending_posts[post_key] = {
-            'title': title,
-            'content': formatted_content,
-            'media_id': media_id
-        }
-        
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("📝 В Черновики", callback_data=f"draft_{post_key}"),
-                InlineKeyboardButton("🚀 Опубликовать", callback_data=f"publish_{post_key}")
-            ]
-        ])
-        
-        msg = f"📢 НОВЫЙ ПОСТ ИЗ КАНАЛА!\n\n"
-        msg += f"Заголовок: {title[:100]}\n"
-        msg += f"Фото: {'есть' if media_id else 'нет'}\n\n"
-        msg += f"Выбери действие:"
-        
-        if ADMIN_ID:
-            await context.bot.send_message(
-                chat_id=ADMIN_ID,
-                text=msg,
-                reply_markup=keyboard
-            )
-            logger.info(f"✉️ Отправлен запрос админу")
-            
-    except Exception as e:
-        logger.error(f"Ошибка: {e}")
-
-async def handle_private_message(update: Update, context):
+async def handle_message(update: Update, context):
+    """Обработка сообщений от админа"""
     try:
         message = update.message
         if not message or str(message.from_user.id) != ADMIN_ID:
+            await message.reply_text("❌ У вас нет прав для использования этого бота.")
             return
         
-        logger.info(f"📨 Получено сообщение в личку")
+        logger.info(f"📨 Получено сообщение от админа")
         
+        # Получаем текст и фото
         text = message.caption or message.text or ""
         if not text and not message.photo:
-            await message.reply_text("❌ Отправьте текст или фото с подписью.")
+            await message.reply_text("❌ Отправьте текст новости (можно с фото).\n\nПервая строка будет заголовком.")
             return
         
+        # Извлекаем заголовок и контент
         title, content_text = extract_title_and_content(text)
+        logger.info(f"📌 Заголовок: {title[:50]}...")
         
+        # Обработка фото
         media_id = None
         if message.photo:
             photo = message.photo[-1]
+            await message.reply_text("⏳ Загружаю фото...")
             media_id = download_and_upload_photo(photo.file_id)
             if media_id:
-                logger.info(f"✅ Фото загружено")
+                logger.info(f"✅ Фото загружено, ID: {media_id}")
+            else:
+                await message.reply_text("⚠️ Фото не загрузилось, продолжу без фото.")
         
+        # Форматируем контент
         formatted_content = format_content_for_wp(content_text)
         
+        # Сохраняем во временное хранилище
         post_key = str(int(time.time() * 1000))
         pending_posts[post_key] = {
             'title': title,
@@ -194,6 +195,7 @@ async def handle_private_message(update: Update, context):
             'media_id': media_id
         }
         
+        # Создаем кнопки выбора
         keyboard = InlineKeyboardMarkup([
             [
                 InlineKeyboardButton("📝 В Черновики", callback_data=f"draft_{post_key}"),
@@ -201,23 +203,25 @@ async def handle_private_message(update: Update, context):
             ]
         ])
         
-        msg = f"📢 НОВЫЙ ПОСТ!\n\n"
-        msg += f"Заголовок: {title[:100]}\n"
-        msg += f"Фото: {'есть' if media_id else 'нет'}\n\n"
-        msg += f"Выбери действие:"
+        # Отправляем сообщение с кнопками
+        msg = f"📢 <b>Новая новость!</b>\n\n"
+        msg += f"<b>Заголовок:</b> {title[:100]}\n"
+        msg += f"<b>Фото:</b> {'✅ есть' if media_id else '❌ нет'}\n\n"
+        msg += f"<i>Выбери действие:</i>"
         
-        await context.bot.send_message(
-            chat_id=ADMIN_ID,
-            text=msg,
+        await message.reply_text(
+            msg,
+            parse_mode='HTML',
             reply_markup=keyboard
         )
-        await message.reply_text("✅ Пост отправлен на утверждение!")
-        logger.info(f"✉️ Отправлен запрос админу")
+        logger.info(f"✉️ Отправлен запрос на публикацию")
         
     except Exception as e:
-        logger.error(f"Ошибка: {e}")
+        logger.error(f"❌ Ошибка: {e}")
+        await message.reply_text("❌ Произошла ошибка при обработке сообщения.")
 
 async def handle_button(update: Update, context):
+    """Обработка нажатия на кнопку"""
     query = update.callback_query
     await query.answer()
     
@@ -225,40 +229,55 @@ async def handle_button(update: Update, context):
     post_data = pending_posts.get(post_key)
     
     if not post_data:
-        await query.edit_message_text("❌ Пост не найден")
+        await query.edit_message_text("❌ Пост не найден. Возможно, время ожидания истекло.")
         return
     
-    status = 'publish' if action == 'publish' else 'draft'
-    status_text = "опубликован" if action == 'publish' else "сохранен в Черновики"
-    result_text = "🚀 Пост опубликован на сайте" if action == 'publish' else "📝 Пост сохранен в Черновики"
+    if action == 'draft':
+        status = 'draft'
+        status_text = "сохранен в Черновики"
+        result_text = "📝 Пост сохранен в <b>Черновики</b>"
+    else:
+        status = 'publish'
+        status_text = "опубликован"
+        result_text = "🚀 Пост <b>опубликован</b> на сайте"
     
     await query.edit_message_text(f"⏳ {status_text}...")
+    
     success, link = create_wp_post(
-        post_data['title'], 
-        post_data['content'], 
-        post_data['media_id'], 
+        post_data['title'],
+        post_data['content'],
+        post_data['media_id'],
         status
     )
     
     if success:
-        await query.edit_message_text(f"✅ Готово!\n\n{result_text}\n\nСсылка: {link}")
-        logger.info(f"✅ Пост {status_text}")
+        await query.edit_message_text(
+            f"✅ <b>Готово!</b>\n\n"
+            f"{result_text}\n\n"
+            f"<b>Ссылка:</b> {link}",
+            parse_mode='HTML'
+        )
+        logger.info(f"✅ Пост {status_text}: {post_data['title'][:50]}")
     else:
-        await query.edit_message_text(f"❌ Ошибка!\n\nНе удалось {status_text} пост.\n\n💡 Проверьте подключение к WordPress.")
+        await query.edit_message_text(
+            f"❌ <b>Ошибка!</b>\n\n"
+            f"Не удалось {status_text} пост.\n\n"
+            f"💡 Проверьте подключение к WordPress.\n"
+            f"💡 Убедитесь, что хостинг не блокирует запросы.",
+            parse_mode='HTML'
+        )
         logger.error(f"❌ Ошибка при создании поста")
     
+    # Удаляем пост из хранилища
     del pending_posts[post_key]
 
 # Создаем приложение
 application = Application.builder().token(TELEGRAM_TOKEN).build()
 
+# Обработчик личных сообщений
 application.add_handler(MessageHandler(
-    filters.Chat(chat_id=CHANNEL_ID) & (filters.TEXT | filters.PHOTO | filters.CAPTION),
-    handle_channel_post
-))
-application.add_handler(MessageHandler(
-    ~filters.ChatType.CHANNEL & (filters.TEXT | filters.PHOTO | filters.CAPTION),
-    handle_private_message
+    filters.TEXT | filters.PHOTO | filters.CAPTION,
+    handle_message
 ))
 application.add_handler(CallbackQueryHandler(handle_button))
 
@@ -282,7 +301,7 @@ def health():
 
 @app.route('/', methods=['GET'])
 def index():
-    return jsonify({'status': 'Bot is running'})
+    return jsonify({'status': 'Bot is running', 'mode': 'private messages only'})
 
 if __name__ == '__main__':
     render_url = os.getenv('RENDER_EXTERNAL_URL')
@@ -290,8 +309,12 @@ if __name__ == '__main__':
     
     logger.info(f"🚀 ЗАПУСК БОТА...")
     logger.info(f"🔗 Вебхук: {webhook_url}")
-    logger.info(f"📢 ID канала: {CHANNEL_ID}")
+    logger.info(f"🌐 WordPress: {WP_URL}")
+    logger.info(f"📝 Тип записей: news")
     logger.info(f"👤 ID админа: {ADMIN_ID}")
+    
+    if not ADMIN_ID:
+        logger.warning("⚠️ YOUR_TELEGRAM_ID не задан! Бот не будет отвечать.")
     
     async def setup():
         await application.initialize()
