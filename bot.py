@@ -21,6 +21,10 @@ WP_URL = os.getenv('WP_URL')
 WP_USERNAME = os.getenv('WP_USERNAME')
 WP_PASSWORD = os.getenv('WP_PASSWORD')
 ADMIN_ID = os.getenv('YOUR_TELEGRAM_ID')
+DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
+
+# API DeepSeek
+DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
 
 # WordPress API
 WP_API_URL = f"{WP_URL}/wp-json/wp/v2"
@@ -34,6 +38,11 @@ wp_session = requests.Session()
 
 # Хранилище временных постов
 pending_posts = {}
+
+# Промпт для DeepSeek
+DEEPSEEK_PROMPT = """Ты редактор новостного сайта. Перепиши новость в строгом городском формате, объемом около 650 символов. Убери лишнюю воду, сделай интересный заголовок, никаких смайликов. Не используй символы # и ** в ответе. Сохрани главные факты. Расставь абзацы.
+
+ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст."""
 
 def extract_title_and_content(text):
     """Извлечение заголовка из текста"""
@@ -60,15 +69,44 @@ def format_content_for_wp(text):
     for para in paragraphs:
         para = para.strip()
         if para:
-            # Конвертируем ссылки
             para = re.sub(r'(https?://[^\s]+)', r'<a href="\1">\1</a>', para)
-            # Конвертируем **жирный**
             para = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', para)
-            # Конвертируем *курсив*
             para = re.sub(r'\*(.+?)\*', r'<em>\1</em>', para)
             formatted.append(f'<p>{para}</p>')
     
     return '\n'.join(formatted)
+
+def process_text_with_deepseek(text: str) -> str:
+    """Обработка текста через DeepSeek"""
+    if not DEEPSEEK_API_KEY:
+        return None
+    
+    try:
+        response = requests.post(
+            DEEPSEEK_API_URL,
+            headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"},
+            json={
+                "model": "deepseek-chat",
+                "messages": [
+                    {"role": "system", "content": "Ты редактор новостного сайта. Отвечай только готовым новостным текстом, без пояснений и вступлений. Не используй символы # и ** в ответе."},
+                    {"role": "user", "content": f"{DEEPSEEK_PROMPT}\n\n{text}"}
+                ],
+                "temperature": 0.7,
+                "max_tokens": 1000
+            },
+            timeout=60
+        )
+        if response.status_code == 200:
+            result = response.json()["choices"][0]["message"]["content"]
+            result = re.sub(r'^Вот обработанный новостной текст.*?:', '', result, flags=re.IGNORECASE)
+            result = re.sub(r'^Вот.*?текст.*?:', '', result, flags=re.IGNORECASE)
+            result = re.sub(r'^#+\s+', '', result, flags=re.MULTILINE)
+            result = result.strip()
+            return result
+        return None
+    except Exception as e:
+        logger.error(f"Ошибка DeepSeek: {e}")
+        return None
 
 def download_and_upload_photo(file_id):
     """Синхронная загрузка фото из Telegram в WordPress"""
@@ -91,7 +129,7 @@ def download_and_upload_photo(file_id):
             return None
         
         photo_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
-        logger.info(f"Скачивание фото: {photo_url[:50]}...")
+        logger.info(f"Скачивание фото...")
         
         download_headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -127,13 +165,8 @@ def download_and_upload_photo(file_id):
             return media_id
         else:
             logger.error(f"Ошибка WP при загрузке фото: {wp_response.status_code}")
-            if wp_response.status_code == 401:
-                logger.error("❌ Ошибка авторизации! Проверь WP_USERNAME и WP_PASSWORD")
             return None
             
-    except requests.exceptions.Timeout:
-        logger.error("Таймаут при загрузке фото")
-        return None
     except Exception as e:
         logger.error(f"Ошибка фото: {e}")
         return None
@@ -170,48 +203,14 @@ def create_wp_draft(title, content, media_id=None):
         if response.status_code == 201:
             post_link = response.json()['link']
             logger.info(f"✅ Черновик создан: {post_link}")
-            return True
+            return True, post_link
         else:
             logger.error(f"Ошибка: {response.status_code}")
-            return False
+            return False, None
             
     except Exception as e:
         logger.error(f"Ошибка: {e}")
-        return False
-
-async def handle_channel_post(update: Update, context):
-    """Обработка постов из канала"""
-    try:
-        logger.info("=" * 60)
-        logger.info("🔍 НОВЫЙ ПОСТ ИЗ КАНАЛА")
-        
-        channel_post = update.channel_post
-        if not channel_post:
-            return
-        
-        text = channel_post.caption or channel_post.text or ""
-        title, content_text = extract_title_and_content(text)
-        logger.info(f"📌 Заголовок: {title[:60]}...")
-        
-        media_id = None
-        if channel_post.photo:
-            photo = channel_post.photo[-1]
-            media_id = download_and_upload_photo(photo.file_id)
-            if media_id:
-                logger.info(f"📸 Фото загружено")
-        
-        formatted_content = format_content_for_wp(content_text)
-        success = create_wp_draft(title, formatted_content, media_id)
-        
-        if success:
-            logger.info(f"✨ Пост сохранен как черновик")
-        else:
-            logger.error("❌ Ошибка")
-            
-        logger.info("=" * 60)
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка: {e}")
+        return False, None
 
 async def handle_private_message(update: Update, context):
     """Обработка сообщений из личного чата"""
@@ -227,46 +226,39 @@ async def handle_private_message(update: Update, context):
         logger.info("=" * 60)
         logger.info("🔍 НОВЫЙ ПОСТ ИЗ ЛИЧНОГО ЧАТА")
         
+        # Получаем текст и фото
         text = message.caption or message.text or ""
+        photo_file_id = None
+        
+        if message.photo:
+            photo_file_id = message.photo[-1]['file_id']
+        
         if not text:
             await message.reply_text("❌ Отправьте текст новости.\nПервая строка будет заголовком.")
             return
         
-        title, content_text = extract_title_and_content(text)
-        logger.info(f"📌 Заголовок: {title[:60]}...")
-        
-        media_id = None
-        if message.photo:
-            photo = message.photo[-1]
-            await message.reply_text("⏳ Загружаю фото...")
-            media_id = download_and_upload_photo(photo.file_id)
-            if media_id:
-                logger.info(f"📸 Фото загружено")
-        
-        formatted_content = format_content_for_wp(content_text)
-        
-        post_key = str(message.message_id)
+        # Сохраняем данные
+        post_key = str(int(time.time() * 1000))
         pending_posts[post_key] = {
-            'title': title,
-            'content': formatted_content,
-            'media_id': media_id
+            'original_text': text,
+            'photo_file_id': photo_file_id,
+            'title': None,
+            'content': None
         }
         
+        # Отправляем кнопки выбора
         keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("📝 В Черновики", callback_data=f"draft_{post_key}"),
-                InlineKeyboardButton("🚀 Опубликовать", callback_data=f"publish_{post_key}")
-            ]
+            [InlineKeyboardButton("🤖 Обработать через ИИ", callback_data=f"ai_{post_key}")],
+            [InlineKeyboardButton("📝 Без ИИ (сразу в черновики)", callback_data=f"draft_{post_key}")]
         ])
         
-        preview = f"📢 <b>Предпросмотр</b>\n\n"
-        preview += f"<b>{title}</b>\n\n"
-        preview += f"{content_text[:300]}{'...' if len(content_text) > 300 else ''}\n\n"
-        preview += f"<b>Фото:</b> {'✅ есть' if media_id else '❌ нет'}\n\n"
+        preview = f"📢 <b>Новый пост получен!</b>\n\n"
+        preview += f"<b>Текст:</b>\n{text[:300]}{'...' if len(text) > 300 else ''}\n\n"
+        preview += f"<b>Фото:</b> {'✅ есть' if photo_file_id else '❌ нет'}\n\n"
         preview += f"<i>Выбери действие:</i>"
         
         await message.reply_text(preview, parse_mode='HTML', reply_markup=keyboard)
-        logger.info(f"✉️ Отправлены кнопки")
+        logger.info(f"✉️ Отправлены кнопки выбора")
         
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
@@ -276,51 +268,90 @@ async def handle_button(update: Update, context):
     query = update.callback_query
     await query.answer()
     
-    action, post_key = query.data.split('_')
-    post_data = pending_posts.get(post_key)
+    data = query.data
+    parts = data.split('_')
+    action = parts[0]
+    post_key = parts[1]
     
+    post_data = pending_posts.get(post_key)
     if not post_data:
         await query.edit_message_text("❌ Пост не найден.")
         return
     
-    if action == 'draft':
-        status_text = "сохранен в черновиках"
-        result_text = "📝 Пост сохранен в Черновики"
-    else:
-        status_text = "опубликован"
-        result_text = "🚀 Пост опубликован на сайте"
+    # Обработка через ИИ
+    if action == 'ai':
+        await query.edit_message_text("🤖 Обрабатываю текст через ИИ...")
+        processed = process_text_with_deepseek(post_data['original_text'])
+        
+        if processed:
+            title, content = extract_title_and_content(processed)
+            post_data['title'] = title
+            post_data['content'] = format_content_for_wp(content)
+            post_data['processed_text'] = processed
+            
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Опубликовать на сайт", callback_data=f"publish_{post_key}")],
+                [InlineKeyboardButton("📝 В черновики", callback_data=f"draft_{post_key}")],
+                [InlineKeyboardButton("🔄 Ещё раз через ИИ", callback_data=f"ai_{post_key}")]
+            ])
+            
+            msg = f"<b>{title}</b>\n\n{content}\n\nФото: {'✅ есть' if post_data['photo_file_id'] else '❌ нет'}"
+            await query.edit_message_text(msg, parse_mode='HTML', reply_markup=keyboard)
+        else:
+            await query.edit_message_text("❌ Ошибка ИИ. Отправляю без обработки...")
+            title, content = extract_title_and_content(post_data['original_text'])
+            post_data['title'] = title
+            post_data['content'] = format_content_for_wp(content)
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Опубликовать на сайт", callback_data=f"publish_{post_key}")],
+                [InlineKeyboardButton("📝 В черновики", callback_data=f"draft_{post_key}")]
+            ])
+            msg = f"<b>{title}</b>\n\n{content}\n\nФото: {'✅ есть' if post_data['photo_file_id'] else '❌ нет'}"
+            await query.edit_message_text(msg, parse_mode='HTML', reply_markup=keyboard)
+        return
     
-    await query.edit_message_text(f"⏳ {status_text}...")
+    # Публикация на сайт
+    if action == 'publish':
+        await query.edit_message_text("⏳ Публикую на сайт...")
+        media_id = None
+        if post_data.get('photo_file_id'):
+            media_id = download_and_upload_photo(post_data['photo_file_id'])
+        success, link = create_wp_draft(
+            post_data['title'],
+            post_data['content'],
+            media_id
+        )
+        if success:
+            await query.edit_message_text(f"✅ Пост опубликован!\n\n{link}")
+        else:
+            await query.edit_message_text("❌ Ошибка публикации")
+        del pending_posts[post_key]
     
-    success = create_wp_draft(
-        post_data['title'],
-        post_data['content'],
-        post_data['media_id']
-    )
-    
-    if success:
-        await query.edit_message_text(f"✅ Готово!\n\n{result_text}\n\nЗаголовок: {post_data['title'][:100]}")
-        logger.info(f"✅ Пост {status_text}")
-    else:
-        await query.edit_message_text(f"❌ Ошибка! Не удалось {status_text} пост.")
-    
-    del pending_posts[post_key]
+    # Черновик
+    elif action == 'draft':
+        await query.edit_message_text("⏳ Сохраняю в черновики...")
+        media_id = None
+        if post_data.get('photo_file_id'):
+            media_id = download_and_upload_photo(post_data['photo_file_id'])
+        success, link = create_wp_draft(
+            post_data['title'],
+            post_data['content'],
+            media_id
+        )
+        if success:
+            await query.edit_message_text(f"✅ Пост сохранен в черновиках!\n\n{link}")
+        else:
+            await query.edit_message_text("❌ Ошибка сохранения")
+        del pending_posts[post_key]
 
 # Создаем приложение
 application = Application.builder().token(TELEGRAM_TOKEN).build()
 
-# Обработчик постов из канала
-application.add_handler(MessageHandler(
-    filters.Chat(chat_id=CHANNEL_ID) & (filters.TEXT | filters.PHOTO | filters.CAPTION),
-    handle_channel_post
-))
-
 # Обработчик личных сообщений
 application.add_handler(MessageHandler(
-    ~filters.ChatType.CHANNEL & (filters.TEXT | filters.PHOTO | filters.CAPTION),
+    filters.PRIVATE & (filters.TEXT | filters.PHOTO | filters.CAPTION),
     handle_private_message
 ))
-
 application.add_handler(CallbackQueryHandler(handle_button))
 
 logger.info("✅ Обработчики добавлены")
@@ -353,8 +384,8 @@ if __name__ == '__main__':
     
     logger.info(f"🚀 ЗАПУСК БОТА...")
     logger.info(f"🔗 Вебхук: {webhook_url}")
-    logger.info(f"📢 Канал: {CHANNEL_ID}")
     logger.info(f"👤 Админ ID: {ADMIN_ID}")
+    logger.info(f"🤖 DeepSeek: {'✅' if DEEPSEEK_API_KEY else '❌'}")
     
     async def setup():
         await application.initialize()
