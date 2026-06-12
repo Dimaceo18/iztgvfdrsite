@@ -212,6 +212,40 @@ def create_wp_draft(title, content, media_id=None):
         logger.error(f"Ошибка: {e}")
         return False, None
 
+async def handle_channel_post(update: Update, context):
+    """Обработка постов из канала"""
+    try:
+        logger.info("=" * 60)
+        logger.info("🔍 НОВЫЙ ПОСТ ИЗ КАНАЛА")
+        
+        channel_post = update.channel_post
+        if not channel_post:
+            return
+        
+        text = channel_post.caption or channel_post.text or ""
+        title, content_text = extract_title_and_content(text)
+        logger.info(f"📌 Заголовок: {title[:60]}...")
+        
+        media_id = None
+        if channel_post.photo:
+            photo = channel_post.photo[-1]
+            media_id = download_and_upload_photo(photo.file_id)
+            if media_id:
+                logger.info(f"📸 Фото загружено")
+        
+        formatted_content = format_content_for_wp(content_text)
+        success, link = create_wp_draft(title, formatted_content, media_id)
+        
+        if success:
+            logger.info(f"✨ Пост сохранен как черновик: {link}")
+        else:
+            logger.error("❌ Ошибка")
+            
+        logger.info("=" * 60)
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка: {e}")
+
 async def handle_private_message(update: Update, context):
     """Обработка сообщений из личного чата"""
     try:
@@ -226,7 +260,6 @@ async def handle_private_message(update: Update, context):
         logger.info("=" * 60)
         logger.info("🔍 НОВЫЙ ПОСТ ИЗ ЛИЧНОГО ЧАТА")
         
-        # Получаем текст и фото
         text = message.caption or message.text or ""
         photo_file_id = None
         
@@ -246,7 +279,7 @@ async def handle_private_message(update: Update, context):
             'content': None
         }
         
-        # Отправляем кнопки выбора
+        # Кнопки выбора
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("🤖 Обработать через ИИ", callback_data=f"ai_{post_key}")],
             [InlineKeyboardButton("📝 Без ИИ (сразу в черновики)", callback_data=f"draft_{post_key}")]
@@ -347,11 +380,19 @@ async def handle_button(update: Update, context):
 # Создаем приложение
 application = Application.builder().token(TELEGRAM_TOKEN).build()
 
-# Обработчик личных сообщений
+# Обработчик постов из канала
 application.add_handler(MessageHandler(
-    filters.PRIVATE & (filters.TEXT | filters.PHOTO | filters.CAPTION),
+    filters.Chat(chat_id=CHANNEL_ID) & (filters.TEXT | filters.PHOTO | filters.CAPTION),
+    handle_channel_post
+))
+
+# Обработчик личных сообщений (исправленный фильтр)
+application.add_handler(MessageHandler(
+    ~filters.ChatType.CHANNEL & (filters.TEXT | filters.PHOTO | filters.CAPTION),
     handle_private_message
 ))
+
+# Обработчик кнопок
 application.add_handler(CallbackQueryHandler(handle_button))
 
 logger.info("✅ Обработчики добавлены")
@@ -384,6 +425,7 @@ if __name__ == '__main__':
     
     logger.info(f"🚀 ЗАПУСК БОТА...")
     logger.info(f"🔗 Вебхук: {webhook_url}")
+    logger.info(f"📢 Канал: {CHANNEL_ID}")
     logger.info(f"👤 Админ ID: {ADMIN_ID}")
     logger.info(f"🤖 DeepSeek: {'✅' if DEEPSEEK_API_KEY else '❌'}")
     
