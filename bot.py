@@ -36,6 +36,7 @@ wp_session = requests.Session()
 # Хранилище
 pending_posts = {}
 
+# Промпт для DeepSeek
 DEEPSEEK_PROMPT = """Ты редактор новостного сайта. Перепиши новость в строгом городском формате, объемом около 650 символов. Убери лишнюю воду, сделай интересный заголовок, никаких смайликов. Не используй символы # и ** в ответе. Сохрани главные факты. Расставь абзацы.
 
 ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст."""
@@ -318,16 +319,19 @@ async def handle_button(update: Update, context):
 # Создаем приложение
 application = Application.builder().token(TELEGRAM_TOKEN).build()
 
+# Обработчик постов из канала
 application.add_handler(MessageHandler(
     filters.Chat(chat_id=CHANNEL_ID) & (filters.TEXT | filters.PHOTO | filters.CAPTION),
     handle_channel_post
 ))
 
+# Обработчик личных сообщений - ИСПРАВЛЕННЫЙ ФИЛЬТР
 application.add_handler(MessageHandler(
-    filters.PRIVATE & (filters.TEXT | filters.PHOTO | filters.CAPTION),
+    ~filters.ChatType.CHANNEL & (filters.TEXT | filters.PHOTO | filters.CAPTION),
     handle_private_message
 ))
 
+# Обработчик кнопок
 application.add_handler(CallbackQueryHandler(handle_button))
 
 logger.info("✅ Обработчики добавлены")
@@ -360,6 +364,9 @@ if __name__ == '__main__':
     
     logger.info(f"🚀 ЗАПУСК БОТА...")
     logger.info(f"🔗 Вебхук: {webhook_url}")
+    logger.info(f"📢 Канал: {CHANNEL_ID}")
+    logger.info(f"👤 Админ ID: {ADMIN_ID}")
+    logger.info(f"🤖 DeepSeek: {'✅' if DEEPSEEK_API_KEY else '❌'}")
     
     async def setup():
         await application.initialize()
