@@ -37,7 +37,6 @@ pending_posts = {}
 # Базовый URL для Telegram API
 TG_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
-# Промпт для DeepSeek
 DEEPSEEK_PROMPT = """Ты редактор новостного сайта. Перепиши новость в строгом городском формате, объемом около 650 символов. Убери лишнюю воду, сделай интересный заголовок, никаких смайликов. Не используй символы # и ** в ответе. Сохрани главные факты. Расставь абзацы.
 
 ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст."""
@@ -119,65 +118,90 @@ def process_text_with_deepseek(text):
         return None
 
 def download_and_upload_photo(file_id):
+    """Загрузка фото в WordPress - ВЕРСИЯ 2 (более надёжная)"""
     try:
-        logger.info(f"📸 Начинаю загрузку фото, file_id: {file_id}")
+        logger.info(f"📸 [1/5] Начинаю загрузку фото, file_id: {file_id}")
         
+        # Шаг 1: Получаем путь к файлу
         get_file = requests.get(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile",
             params={'file_id': file_id},
             timeout=30
         )
         if get_file.status_code != 200:
-            logger.error(f"Ошибка getFile: {get_file.status_code}")
+            logger.error(f"❌ [1/5] Ошибка getFile: {get_file.status_code}")
             return None
         
         file_path = get_file.json().get('result', {}).get('file_path')
         if not file_path:
-            logger.error("Не получен file_path")
+            logger.error("❌ [1/5] Не получен file_path")
             return None
         
+        logger.info(f"✅ [1/5] file_path получен: {file_path}")
+        
+        # Шаг 2: Скачиваем фото
         photo_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
-        logger.info(f"Скачиваю фото...")
+        logger.info(f"📸 [2/5] Скачиваю фото: {photo_url[:60]}...")
         
         photo_data = requests.get(photo_url, timeout=60)
         if photo_data.status_code != 200:
-            logger.error(f"Ошибка скачивания: {photo_data.status_code}")
+            logger.error(f"❌ [2/5] Ошибка скачивания: {photo_data.status_code}")
             return None
         
-        logger.info(f"Фото скачано, размер: {len(photo_data.content)} байт")
+        logger.info(f"✅ [2/5] Фото скачано, размер: {len(photo_data.content)} байт")
         
+        # Шаг 3: Подготавливаем заголовки для WordPress
+        wp_headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json',
+            'Content-Disposition': f'attachment; filename="telegram_photo_{int(time.time())}.jpg"',
+            'Content-Type': 'image/jpeg'
+        }
+        
+        logger.info(f"📸 [3/5] Отправляю фото в WordPress...")
+        
+        # Шаг 4: Загружаем в WordPress
         wp_response = wp_session.post(
             WP_MEDIA_URL,
             auth=(WP_USERNAME, WP_PASSWORD),
-            headers={'Content-Disposition': f'attachment; filename="photo_{int(time.time())}.jpg"'},
+            headers=wp_headers,
             data=photo_data.content,
             timeout=60
         )
         
-        logger.info(f"Ответ WP на загрузку фото: {wp_response.status_code}")
+        logger.info(f"📸 [4/5] Ответ WP: статус {wp_response.status_code}")
         
         if wp_response.status_code == 201:
             media_id = wp_response.json()['id']
-            logger.info(f"✅ Фото загружено в WP, ID: {media_id}")
+            source_url = wp_response.json().get('source_url', 'неизвестно')
+            logger.info(f"✅ [5/5] Фото загружено! ID: {media_id}, URL: {source_url}")
             return media_id
         else:
-            logger.error(f"Ошибка WP: {wp_response.status_code} - {wp_response.text[:200]}")
+            logger.error(f"❌ [4/5] Ошибка WP: {wp_response.status_code}")
+            logger.error(f"Ответ: {wp_response.text[:300]}")
             return None
             
     except Exception as e:
-        logger.error(f"Ошибка фото: {e}")
+        logger.error(f"❌ Ошибка фото: {e}")
         return None
 
 def create_wp_post(title, content, media_id=None, status='draft'):
+    """Создание поста в WordPress с фото"""
     post_data = {
         'title': title,
         'content': content,
         'status': status,
         'type': 'news',
     }
+    
+    logger.info(f"📝 Создаю пост: {title[:50]}...")
+    logger.info(f"📎 Параметры: status={status}, media_id={media_id}")
+    
     if media_id:
         post_data['featured_media'] = media_id
-        logger.info(f"📎 Прикрепляю фото с ID: {media_id} к посту")
+        logger.info(f"📸 Фото с ID {media_id} будет прикреплено как обложка")
+    else:
+        logger.warning("⚠️ Пост будет без фото")
     
     try:
         response = wp_session.post(
@@ -187,22 +211,25 @@ def create_wp_post(title, content, media_id=None, status='draft'):
             timeout=60
         )
         
-        logger.info(f"Ответ WP на создание поста: {response.status_code}")
+        logger.info(f"📝 Ответ WP: {response.status_code}")
         
         if response.status_code == 201:
             post_link = response.json()['link']
-            logger.info(f"✅ Пост создан: {post_link}")
+            logger.info(f"✅ ПОСТ СОЗДАН! Ссылка: {post_link}")
+            if media_id:
+                logger.info(f"✅ Фото ID {media_id} прикреплено к посту")
             return True, post_link
         else:
-            logger.error(f"Ошибка: {response.status_code} - {response.text[:200]}")
+            logger.error(f"❌ Ошибка: {response.status_code}")
+            logger.error(f"Ответ: {response.text[:300]}")
             return False, None
     except Exception as e:
-        logger.error(f"Ошибка: {e}")
+        logger.error(f"❌ Ошибка: {e}")
         return False, None
 
 def process_update(update_json):
     try:
-        # Обработка callback_query (нажатие кнопки)
+        # Обработка callback_query
         if 'callback_query' in update_json:
             callback = update_json['callback_query']
             data = callback['data']
@@ -257,11 +284,19 @@ def process_update(update_json):
                 
                 tg_edit_message_text(chat_id, msg_id, f"⏳ {status_text}...")
                 
+                # Загружаем фото
                 media_id = None
                 if post_data.get('photo_file_id'):
-                    logger.info(f"📸 Загружаю фото для поста...")
+                    logger.info("=" * 50)
+                    logger.info("🖼️ НАЧАЛО ЗАГРУЗКИ ФОТО ДЛЯ ПОСТА")
                     media_id = download_and_upload_photo(post_data['photo_file_id'])
-                    logger.info(f"📸 Получен media_id: {media_id}")
+                    if media_id:
+                        logger.info(f"✅ ФОТО УСПЕШНО ЗАГРУЖЕНО! ID: {media_id}")
+                    else:
+                        logger.error("❌ ФОТО НЕ ЗАГРУЗИЛОСЬ!")
+                    logger.info("=" * 50)
+                else:
+                    logger.warning("⚠️ Нет фото для загрузки")
                 
                 success, link = create_wp_post(
                     post_data['title'],
@@ -341,11 +376,10 @@ if __name__ == '__main__':
     
     logger.info(f"🚀 ЗАПУСК БОТА...")
     logger.info(f"🔗 Вебхук: {webhook_url}")
-    logger.info(f"📢 Канал: {CHANNEL_ID}")
+    logger.info(f"🌐 WordPress: {WP_URL}")
     logger.info(f"👤 Админ ID: {ADMIN_ID}")
     logger.info(f"🤖 DeepSeek: {'✅' if DEEPSEEK_API_KEY else '❌'}")
     
-    # Установка вебхука
     requests.post(f"{TG_API_URL}/deleteWebhook")
     requests.post(f"{TG_API_URL}/setWebhook", json={'url': webhook_url})
     logger.info("✅ Вебхук установлен")
