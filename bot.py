@@ -3,10 +3,8 @@ import requests
 import logging
 import re
 import time
-import asyncio
+import json
 from flask import Flask, request, jsonify
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, MessageHandler, filters, CallbackQueryHandler
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -30,60 +28,68 @@ DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
 WP_API_URL = f"{WP_URL}/wp-json/wp/v2"
 WP_MEDIA_URL = f"{WP_URL}/wp-json/wp/v2/media"
 
-# Flask приложение
 app = Flask(__name__)
-
-# Создаём сессию для постоянного соединения с WordPress
 wp_session = requests.Session()
 
-# Хранилище временных постов
+# Хранилище
 pending_posts = {}
 
-# Промпт для DeepSeek
+# Базовый URL для Telegram API
+TG_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
+
 DEEPSEEK_PROMPT = """Ты редактор новостного сайта. Перепиши новость в строгом городском формате, объемом около 650 символов. Убери лишнюю воду, сделай интересный заголовок, никаких смайликов. Не используй символы # и ** в ответе. Сохрани главные факты. Расставь абзацы.
 
 ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст."""
 
+def tg_send_message(chat_id, text, reply_markup=None, parse_mode=None):
+    url = f"{TG_API_URL}/sendMessage"
+    data = {'chat_id': chat_id, 'text': text}
+    if reply_markup:
+        data['reply_markup'] = reply_markup
+    if parse_mode:
+        data['parse_mode'] = parse_mode
+    return requests.post(url, json=data, timeout=30)
+
+def tg_edit_message_text(chat_id, message_id, text, reply_markup=None, parse_mode=None):
+    url = f"{TG_API_URL}/editMessageText"
+    data = {'chat_id': chat_id, 'message_id': message_id, 'text': text}
+    if reply_markup:
+        data['reply_markup'] = reply_markup
+    if parse_mode:
+        data['parse_mode'] = parse_mode
+    return requests.post(url, json=data, timeout=30)
+
+def tg_answer_callback_query(callback_id):
+    url = f"{TG_API_URL}/answerCallbackQuery"
+    return requests.post(url, json={'callback_query_id': callback_id}, timeout=30)
+
 def extract_title_and_content(text):
-    """Извлечение заголовка из текста"""
     if not text:
         return "Новый пост из Telegram", ""
-    
     lines = text.strip().split('\n')
     title = lines[0].strip() if lines else "Новый пост"
-    
     if len(title) > 180:
         title = title[:177] + "..."
-    
     content = '\n'.join(lines[1:]).strip() if len(lines) > 1 else ""
     return title, content
 
 def format_content_for_wp(text):
-    """Форматирование контента для WordPress"""
     if not text:
         return ""
-    
     paragraphs = text.split('\n')
     formatted = []
-    
     for para in paragraphs:
         para = para.strip()
         if para:
-            # Конвертируем ссылки
             para = re.sub(r'(https?://[^\s]+)', r'<a href="\1">\1</a>', para)
-            # Конвертируем **жирный**
             para = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', para)
-            # Конвертируем *курсив*
             para = re.sub(r'\*(.+?)\*', r'<em>\1</em>', para)
             formatted.append(f'<p>{para}</p>')
-    
     return '\n'.join(formatted)
 
-def process_text_with_deepseek(text: str) -> str:
-    """Обработка текста через DeepSeek"""
+def process_text_with_deepseek(text):
     if not DEEPSEEK_API_KEY:
         return None
-    
     try:
         response = requests.post(
             DEEPSEEK_API_URL,
@@ -104,15 +110,14 @@ def process_text_with_deepseek(text: str) -> str:
             result = re.sub(r'^Вот обработанный новостной текст.*?:', '', result, flags=re.IGNORECASE)
             result = re.sub(r'^Вот.*?текст.*?:', '', result, flags=re.IGNORECASE)
             result = re.sub(r'^#+\s+', '', result, flags=re.MULTILINE)
-            result = result.strip()
-            return result
+            return result.strip()
         return None
     except Exception as e:
         logger.error(f"Ошибка DeepSeek: {e}")
         return None
 
 def download_and_upload_photo(file_id):
-    """РАБОЧАЯ загрузка фото из Telegram в WordPress (из твоего бота)"""
+    """РАБОЧАЯ загрузка фото из Telegram в WordPress"""
     try:
         get_file_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile"
         file_response = requests.get(get_file_url, params={'file_id': file_id}, timeout=30)
@@ -132,7 +137,7 @@ def download_and_upload_photo(file_id):
             return None
         
         photo_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
-        logger.info(f"Скачивание фото: {photo_url[:50]}...")
+        logger.info(f"Скачивание фото...")
         
         download_headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -168,8 +173,6 @@ def download_and_upload_photo(file_id):
             return media_id
         else:
             logger.error(f"Ошибка WP при загрузке фото: {wp_response.status_code}")
-            if wp_response.status_code == 401:
-                logger.error("❌ Ошибка авторизации! Проверь WP_USERNAME и WP_PASSWORD")
             return None
             
     except Exception as e:
@@ -177,7 +180,7 @@ def download_and_upload_photo(file_id):
         return None
 
 def create_wp_draft(title, content, media_id=None):
-    """Создание черновика в WordPress (из твоего бота - РАБОТАЕТ)"""
+    """Создание черновика в WordPress (РАБОТАЕТ)"""
     post_data = {
         'title': title,
         'content': content,
@@ -195,7 +198,7 @@ def create_wp_draft(title, content, media_id=None):
             'Content-Type': 'application/json',
         }
         
-        logger.info(f"Отправка запроса в WordPress: {WP_API_URL}/news")
+        logger.info(f"Отправка в WordPress...")
         
         response = wp_session.post(
             f"{WP_API_URL}/news",
@@ -207,190 +210,135 @@ def create_wp_draft(title, content, media_id=None):
         
         if response.status_code == 201:
             post_link = response.json()['link']
-            logger.info(f"✅ Черновик создан: {post_link}")
+            logger.info(f"✅ Пост создан: {post_link}")
             return True, post_link
         else:
-            logger.error(f"Ошибка создания поста: {response.status_code}")
+            logger.error(f"Ошибка: {response.status_code}")
             return False, None
             
     except Exception as e:
-        logger.error(f"❌ Ошибка: {e}")
+        logger.error(f"Ошибка: {e}")
         return False, None
 
-async def handle_channel_post(update: Update, context):
-    """Обработка постов из канала"""
+def process_update(update_json):
     try:
-        logger.info("=" * 60)
-        logger.info("🔍 НОВЫЙ ПОСТ ИЗ КАНАЛА")
-        
-        channel_post = update.channel_post
-        if not channel_post:
-            return
-        
-        text = channel_post.caption or channel_post.text or ""
-        title, content_text = extract_title_and_content(text)
-        logger.info(f"📌 Заголовок: {title[:60]}...")
-        
-        media_id = None
-        if channel_post.photo:
-            photo = channel_post.photo[-1]
-            media_id = download_and_upload_photo(photo.file_id)
-            if media_id:
-                logger.info(f"📸 Фото загружено")
-        
-        formatted_content = format_content_for_wp(content_text)
-        
-        if channel_post.date:
-            source_info = f'<p><small>📱 Источник: Telegram | {channel_post.date.strftime("%d.%m.%Y %H:%M")}</small></p>'
-            formatted_content += source_info
-        
-        success, link = create_wp_draft(title, formatted_content, media_id)
-        
-        if success:
-            logger.info(f"✨ Пост сохранен как черновик: {link}")
-        else:
-            logger.error("❌ Ошибка")
+        # Обработка callback_query
+        if 'callback_query' in update_json:
+            callback = update_json['callback_query']
+            data = callback['data']
+            message = callback['message']
+            callback_id = callback['id']
+            chat_id = message['chat']['id']
+            msg_id = message['message_id']
             
-        logger.info("=" * 60)
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка: {e}")
-
-async def handle_private_message(update: Update, context):
-    """Обработка сообщений из личного чата"""
-    try:
-        message = update.message
-        if not message or str(message.from_user.id) != ADMIN_ID:
-            return
-        
-        logger.info("=" * 60)
-        logger.info("🔍 НОВЫЙ ПОСТ ИЗ ЛИЧНОГО ЧАТА")
-        
-        text = message.caption or message.text or ""
-        photo_file_id = message.photo[-1]['file_id'] if message.photo else None
-        
-        if not text:
-            await message.reply_text("❌ Отправьте текст новости.\nПервая строка будет заголовком.")
-            return
-        
-        # Сохраняем данные
-        post_key = str(int(time.time() * 1000))
-        pending_posts[post_key] = {
-            'original_text': text,
-            'photo_file_id': photo_file_id
-        }
-        
-        # Кнопки выбора
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🤖 Обработать через ИИ", callback_data=f"ai_{post_key}")],
-            [InlineKeyboardButton("📝 Без ИИ (сразу в черновики)", callback_data=f"draft_{post_key}")]
-        ])
-        
-        await message.reply_text(
-            f"📢 Пост получен!\n\nФото: {'✅ есть' if photo_file_id else '❌ нет'}\n\nВыбери действие:",
-            reply_markup=keyboard
-        )
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка: {e}")
-
-async def handle_button(update: Update, context):
-    """Обработка нажатия на кнопку"""
-    query = update.callback_query
-    await query.answer()
-    
-    action, post_key = query.data.split('_')
-    post_data = pending_posts.get(post_key)
-    
-    if not post_data:
-        await query.edit_message_text("❌ Пост не найден.")
-        return
-    
-    # Обработка через ИИ
-    if action == 'ai':
-        await query.edit_message_text("🤖 Обрабатываю текст через ИИ...")
-        processed = process_text_with_deepseek(post_data['original_text'])
-        
-        if processed:
-            title, content = extract_title_and_content(processed)
-            formatted_content = format_content_for_wp(content)
-            post_data['title'] = title
-            post_data['content'] = formatted_content
-            post_data['processed'] = processed
+            tg_answer_callback_query(callback_id)
             
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("✅ Опубликовать на сайт", callback_data=f"publish_{post_key}")],
-                [InlineKeyboardButton("📝 В черновики", callback_data=f"draft_{post_key}")],
-                [InlineKeyboardButton("🔄 Ещё раз через ИИ", callback_data=f"ai_{post_key}")]
-            ])
+            action, post_key = data.split('_')
+            post_data = pending_posts.get(post_key)
             
-            await query.edit_message_text(
-                f"<b>{title}</b>\n\n{content}\n\nФото: {'✅ есть' if post_data.get('photo_file_id') else '❌ нет'}",
-                parse_mode='HTML',
-                reply_markup=keyboard
+            if not post_data:
+                tg_edit_message_text(chat_id, msg_id, "❌ Пост не найден.")
+                return
+            
+            # Обработка через ИИ
+            if action == 'ai':
+                tg_edit_message_text(chat_id, msg_id, "🤖 Обрабатываю текст через ИИ...")
+                processed = process_text_with_deepseek(post_data['original_text'])
+                
+                if processed:
+                    title, content = extract_title_and_content(processed)
+                    formatted_content = format_content_for_wp(content)
+                    post_data['title'] = title
+                    post_data['content'] = formatted_content
+                    
+                    keyboard = {
+                        "inline_keyboard": [
+                            [{"text": "✅ Опубликовать на сайт", "callback_data": f"publish_{post_key}"}],
+                            [{"text": "📝 В черновики", "callback_data": f"draft_{post_key}"}],
+                            [{"text": "🔄 Ещё раз через ИИ", "callback_data": f"ai_{post_key}"}]
+                        ]
+                    }
+                    
+                    tg_edit_message_text(
+                        chat_id, msg_id,
+                        f"<b>{title}</b>\n\n{content}\n\nФото: {'✅ есть' if post_data.get('photo_file_id') else '❌ нет'}",
+                        json.dumps(keyboard), 'HTML'
+                    )
+                else:
+                    tg_edit_message_text(chat_id, msg_id, "❌ Ошибка ИИ")
+                return
+            
+            # Публикация
+            if action == 'publish' or action == 'draft':
+                status_text = "опубликован" if action == 'publish' else "сохранен в черновиках"
+                
+                tg_edit_message_text(chat_id, msg_id, f"⏳ {status_text}...")
+                
+                media_id = None
+                if post_data.get('photo_file_id'):
+                    media_id = download_and_upload_photo(post_data['photo_file_id'])
+                    if media_id:
+                        logger.info(f"✅ Фото загружено, ID: {media_id}")
+                
+                success, link = create_wp_draft(
+                    post_data['title'],
+                    post_data['content'],
+                    media_id
+                )
+                
+                if success:
+                    tg_edit_message_text(chat_id, msg_id, f"✅ Пост {status_text}!\n\n{link}")
+                else:
+                    tg_edit_message_text(chat_id, msg_id, f"❌ Ошибка {status_text}")
+                
+                del pending_posts[post_key]
+        
+        # Обработка нового сообщения
+        elif 'message' in update_json:
+            message = update_json['message']
+            chat_id = message['chat']['id']
+            user_id = message['from']['id']
+            
+            if str(user_id) != ADMIN_ID:
+                tg_send_message(chat_id, "❌ У вас нет прав.")
+                return
+            
+            text = message.get('caption') or message.get('text', '')
+            photo_file_id = message['photo'][-1]['file_id'] if 'photo' in message else None
+            
+            if not text:
+                tg_send_message(chat_id, "❌ Отправьте текст новости.")
+                return
+            
+            post_key = str(int(time.time() * 1000))
+            pending_posts[post_key] = {
+                'original_text': text,
+                'photo_file_id': photo_file_id
+            }
+            
+            keyboard = {
+                "inline_keyboard": [
+                    [{"text": "🤖 Обработать через ИИ", "callback_data": f"ai_{post_key}"}],
+                    [{"text": "📝 Без ИИ (сразу в черновики)", "callback_data": f"draft_{post_key}"}]
+                ]
+            }
+            
+            tg_send_message(
+                chat_id,
+                f"📢 Пост получен!\n\nФото: {'✅ есть' if photo_file_id else '❌ нет'}\n\nВыбери действие:",
+                json.dumps(keyboard)
             )
-        else:
-            await query.edit_message_text("❌ Ошибка ИИ")
-        return
-    
-    # Публикация на сайт
-    if action == 'publish' or action == 'draft':
-        status = 'publish' if action == 'publish' else 'draft'
-        status_text = "опубликован" if action == 'publish' else "сохранен в черновиках"
-        
-        await query.edit_message_text(f"⏳ {status_text}...")
-        
-        # Загружаем фото (используем РАБОЧУЮ функцию)
-        media_id = None
-        if post_data.get('photo_file_id'):
-            media_id = download_and_upload_photo(post_data['photo_file_id'])
-            if media_id:
-                logger.info(f"✅ Фото загружено, ID: {media_id}")
-        
-        success, link = create_wp_draft(
-            post_data['title'],
-            post_data['content'],
-            media_id
-        )
-        
-        if success:
-            await query.edit_message_text(f"✅ Пост {status_text}!\n\n{link}")
-        else:
-            await query.edit_message_text(f"❌ Ошибка {status_text}")
-        
-        del pending_posts[post_key]
-
-# Создаем приложение
-application = Application.builder().token(TELEGRAM_TOKEN).build()
-
-# Обработчик постов из канала
-application.add_handler(MessageHandler(
-    filters.Chat(chat_id=CHANNEL_ID) & (filters.TEXT | filters.PHOTO | filters.CAPTION),
-    handle_channel_post
-))
-
-# Обработчик личных сообщений
-application.add_handler(MessageHandler(
-    ~filters.ChatType.CHANNEL & (filters.TEXT | filters.PHOTO | filters.CAPTION),
-    handle_private_message
-))
-
-# Обработчик кнопок
-application.add_handler(CallbackQueryHandler(handle_button))
-
-logger.info("✅ Обработчики добавлены")
-
-wp_session.headers.update({
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-})
+            logger.info(f"✉️ Отправлены кнопки")
+            
+    except Exception as e:
+        logger.error(f"Ошибка: {e}")
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
         json_data = request.get_json(force=True)
         logger.info("🔔 Вебхук получен")
-        update = Update.de_json(json_data, application.bot)
-        asyncio.run(application.process_update(update))
+        process_update(json_data)
         return jsonify({'status': 'ok'})
     except Exception as e:
         logger.error(f"Webhook error: {e}")
@@ -414,13 +362,10 @@ if __name__ == '__main__':
     logger.info(f"👤 Админ ID: {ADMIN_ID}")
     logger.info(f"🤖 DeepSeek: {'✅' if DEEPSEEK_API_KEY else '❌'}")
     
-    async def setup():
-        await application.initialize()
-        await application.bot.delete_webhook()
-        await application.bot.set_webhook(url=webhook_url)
-        logger.info("✅ Вебхук установлен")
-    
-    asyncio.run(setup())
+    # Установка вебхука
+    requests.post(f"{TG_API_URL}/deleteWebhook")
+    requests.post(f"{TG_API_URL}/setWebhook", json={'url': webhook_url})
+    logger.info("✅ Вебхук установлен")
     
     port = int(os.getenv('PORT', 8000))
     app.run(host='0.0.0.0', port=port)
