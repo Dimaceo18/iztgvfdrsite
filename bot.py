@@ -244,16 +244,22 @@ def process_update(update_json):
             chat_id = message['chat']['id']
             msg_id = message['message_id']
             
+            logger.info(f"🔘 Получен callback: {data}")
+            
             tg_answer_callback_query(callback_id)
             
             parts = data.split('_')
             action = parts[0]
             
+            logger.info(f"🔘 Action: {action}, parts: {parts}")
+            
             # Выбор раздела
-            if action == 'select_post_type':
+            if action == 'select_post_type' and len(parts) >= 3:
                 post_key = parts[1]
                 post_type = parts[2]
                 post_data = pending_posts.get(post_key)
+                
+                logger.info(f"🔘 Выбран раздел: {post_type}, post_key={post_key}")
                 
                 if post_data:
                     post_data['post_type'] = post_type
@@ -278,10 +284,13 @@ def process_update(update_json):
                         f"<i>Выбери действие:</i>",
                         json.dumps(keyboard), 'HTML'
                     )
+                    logger.info(f"✅ Обновлено сообщение с выбором действия")
+                else:
+                    logger.error(f"❌ Пост не найден: {post_key}")
                 return
             
             # Показать список разделов
-            if action == 'back_to_sections':
+            if action == 'back_to_sections' and len(parts) >= 2:
                 post_key = parts[1]
                 post_data = pending_posts.get(post_key)
                 
@@ -301,7 +310,7 @@ def process_update(update_json):
                 return
             
             # Обработка через ИИ
-            if action == 'ai':
+            if action == 'ai' and len(parts) >= 2:
                 post_key = parts[1]
                 post_data = pending_posts.get(post_key)
                 
@@ -335,7 +344,7 @@ def process_update(update_json):
                 return
             
             # Публикация или черновик
-            if action == 'publish' or action == 'draft':
+            if (action == 'publish' or action == 'draft') and len(parts) >= 2:
                 post_key = parts[1]
                 post_data = pending_posts.get(post_key)
                 
@@ -429,10 +438,12 @@ def process_update(update_json):
                 f"📂 <b>Выбери раздел для публикации:</b>",
                 json.dumps(keyboard), 'HTML'
             )
-            logger.info(f"✉️ Отправлен выбор раздела")
+            logger.info(f"✉️ Отправлен выбор раздела, post_key={post_key}")
             
     except Exception as e:
         logger.error(f"Ошибка: {e}")
+        import traceback
+        traceback.print_exc()
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
