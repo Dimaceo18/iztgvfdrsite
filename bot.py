@@ -28,7 +28,7 @@ DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
 WP_API_URL = f"{WP_URL}/wp-json/wp/v2"
 WP_MEDIA_URL = f"{WP_URL}/wp-json/wp/v2/media"
 
-# Доступные разделы (типы записей)
+# Доступные разделы
 POST_TYPES = {
     "news": "📰 Новости",
     "auto": "🚗 Авто",
@@ -67,7 +67,12 @@ def tg_edit_message_text(chat_id, message_id, text, reply_markup=None, parse_mod
         data['reply_markup'] = reply_markup
     if parse_mode:
         data['parse_mode'] = parse_mode
-    return requests.post(url, json=data, timeout=30)
+    logger.info(f"📝 Отправляю editMessageText: chat_id={chat_id}, msg_id={message_id}")
+    response = requests.post(url, json=data, timeout=30)
+    logger.info(f"📝 Ответ editMessageText: {response.status_code}")
+    if response.status_code != 200:
+        logger.error(f"Ошибка: {response.text}")
+    return response
 
 def tg_answer_callback_query(callback_id):
     url = f"{TG_API_URL}/answerCallbackQuery"
@@ -204,10 +209,12 @@ def process_update(update_json):
                 post_type = parts[2]
                 post_data = pending_posts.get(post_key)
                 
+                logger.info(f"🔘 Выбран раздел: {post_type}, post_key={post_key}")
+                
                 if post_data:
                     post_data['post_type'] = post_type
                     
-                    # Кнопки: ИИ, Черновики, Публикация
+                    # Кнопки после выбора раздела
                     keyboard = {
                         "inline_keyboard": [
                             [{"text": "🤖 Переделать текст через ИИ", "callback_data": f"ai|{post_key}"}],
@@ -223,7 +230,15 @@ def process_update(update_json):
                                f"Фото: {'✅ есть' if post_data.get('photo_file_id') else '❌ нет'}\n\n" \
                                f"<i>Выбери действие:</i>"
                     
-                    tg_edit_message_text(chat_id, msg_id, new_text, json.dumps(keyboard), 'HTML')
+                    logger.info(f"📝 Пытаюсь обновить сообщение {msg_id}")
+                    response = tg_edit_message_text(chat_id, msg_id, new_text, json.dumps(keyboard), 'HTML')
+                    logger.info(f"📝 Результат: {response.status_code}")
+                    if response.status_code == 200:
+                        logger.info("✅ Сообщение обновлено успешно")
+                    else:
+                        logger.error(f"❌ Ошибка: {response.text}")
+                else:
+                    logger.error(f"❌ Пост не найден: {post_key}")
                 return
             
             # Обработка через ИИ
