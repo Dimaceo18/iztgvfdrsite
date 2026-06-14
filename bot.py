@@ -226,7 +226,6 @@ def create_wp_post(title, content, post_type, media_id=None, publish=False):
             return True, post_link
         else:
             logger.error(f"❌ Ошибка: {response.status_code}")
-            logger.error(f"Ответ: {response.text[:200]}")
             return False, None
             
     except Exception as e:
@@ -248,7 +247,8 @@ def process_update(update_json):
             
             tg_answer_callback_query(callback_id)
             
-            parts = data.split('_')
+            # Разбираем callback_data (формат: action|param1|param2)
+            parts = data.split('|')
             action = parts[0]
             
             logger.info(f"🔘 Action: {action}, parts: {parts}")
@@ -267,10 +267,10 @@ def process_update(update_json):
                     # Показываем финальные кнопки
                     keyboard = {
                         "inline_keyboard": [
-                            [{"text": "✅ Опубликовать на сайт", "callback_data": f"publish_{post_key}"}],
-                            [{"text": "📝 В черновики", "callback_data": f"draft_{post_key}"}],
-                            [{"text": "🔄 Выбрать другой раздел", "callback_data": f"back_to_sections_{post_key}"}],
-                            [{"text": "🤖 Обработать через ИИ", "callback_data": f"ai_{post_key}"}]
+                            [{"text": "✅ Опубликовать на сайт", "callback_data": f"publish|{post_key}"}],
+                            [{"text": "📝 В черновики", "callback_data": f"draft|{post_key}"}],
+                            [{"text": "🔄 Выбрать другой раздел", "callback_data": f"back_to_sections|{post_key}"}],
+                            [{"text": "🤖 Обработать через ИИ", "callback_data": f"ai|{post_key}"}]
                         ]
                     }
                     
@@ -299,7 +299,7 @@ def process_update(update_json):
                         "inline_keyboard": []
                     }
                     for pt_key, pt_name in POST_TYPES.items():
-                        keyboard["inline_keyboard"].append([{"text": pt_name, "callback_data": f"select_post_type_{post_key}_{pt_key}"}])
+                        keyboard["inline_keyboard"].append([{"text": pt_name, "callback_data": f"select_post_type|{post_key}|{pt_key}"}])
                     
                     tg_edit_message_text(
                         chat_id, msg_id,
@@ -329,7 +329,7 @@ def process_update(update_json):
                             "inline_keyboard": []
                         }
                         for pt_key, pt_name in POST_TYPES.items():
-                            keyboard["inline_keyboard"].append([{"text": pt_name, "callback_data": f"select_post_type_{post_key}_{pt_key}"}])
+                            keyboard["inline_keyboard"].append([{"text": pt_name, "callback_data": f"select_post_type|{post_key}|{pt_key}"}])
                         
                         tg_edit_message_text(
                             chat_id, msg_id,
@@ -358,7 +358,7 @@ def process_update(update_json):
                         "inline_keyboard": []
                     }
                     for pt_key, pt_name in POST_TYPES.items():
-                        keyboard["inline_keyboard"].append([{"text": pt_name, "callback_data": f"select_post_type_{post_key}_{pt_key}"}])
+                        keyboard["inline_keyboard"].append([{"text": pt_name, "callback_data": f"select_post_type|{post_key}|{pt_key}"}])
                     
                     tg_edit_message_text(
                         chat_id, msg_id,
@@ -427,7 +427,7 @@ def process_update(update_json):
                 "inline_keyboard": []
             }
             for pt_key, pt_name in POST_TYPES.items():
-                keyboard["inline_keyboard"].append([{"text": pt_name, "callback_data": f"select_post_type_{post_key}_{pt_key}"}])
+                keyboard["inline_keyboard"].append([{"text": pt_name, "callback_data": f"select_post_type|{post_key}|{pt_key}"}])
             
             tg_send_message(
                 chat_id,
