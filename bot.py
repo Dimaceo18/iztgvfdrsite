@@ -60,19 +60,12 @@ def tg_send_message(chat_id, text, reply_markup=None, parse_mode=None):
         data['parse_mode'] = parse_mode
     return requests.post(url, json=data, timeout=30)
 
-def tg_edit_message_text(chat_id, message_id, text, reply_markup=None, parse_mode=None):
+def tg_edit_message_text(chat_id, message_id, text, reply_markup=None):
     url = f"{TG_API_URL}/editMessageText"
     data = {'chat_id': chat_id, 'message_id': message_id, 'text': text}
     if reply_markup:
         data['reply_markup'] = reply_markup
-    if parse_mode:
-        data['parse_mode'] = parse_mode
-    logger.info(f"📝 Отправляю editMessageText: chat_id={chat_id}, msg_id={message_id}")
-    response = requests.post(url, json=data, timeout=30)
-    logger.info(f"📝 Ответ editMessageText: {response.status_code}")
-    if response.status_code != 200:
-        logger.error(f"Ошибка: {response.text}")
-    return response
+    return requests.post(url, json=data, timeout=30)
 
 def tg_answer_callback_query(callback_id):
     url = f"{TG_API_URL}/answerCallbackQuery"
@@ -209,12 +202,12 @@ def process_update(update_json):
                 post_type = parts[2]
                 post_data = pending_posts.get(post_key)
                 
-                logger.info(f"🔘 Выбран раздел: {post_type}, post_key={post_key}")
+                logger.info(f"🔘 Выбран раздел: {post_type}")
                 
                 if post_data:
                     post_data['post_type'] = post_type
                     
-                    # Кнопки после выбора раздела
+                    # Кнопки после выбора раздела (без HTML)
                     keyboard = {
                         "inline_keyboard": [
                             [{"text": "🤖 Переделать текст через ИИ", "callback_data": f"ai|{post_key}"}],
@@ -224,17 +217,15 @@ def process_update(update_json):
                     }
                     
                     section_name = POST_TYPES.get(post_type, post_type)
-                    new_text = f"✅ Выбран раздел: {section_name}\n\n" \
-                               f"<b>{post_data.get('title', 'Без заголовка')}</b>\n\n" \
-                               f"{post_data.get('content', '')[:300]}...\n\n" \
-                               f"Фото: {'✅ есть' if post_data.get('photo_file_id') else '❌ нет'}\n\n" \
-                               f"<i>Выбери действие:</i>"
+                    new_text = f"✅ Выбран раздел: {section_name}\n\n"
+                    new_text += f"Заголовок: {post_data.get('title', 'Без заголовка')}\n\n"
+                    new_text += f"Текст: {post_data.get('content', '')[:300]}...\n\n"
+                    new_text += f"Фото: {'есть' if post_data.get('photo_file_id') else 'нет'}\n\n"
+                    new_text += "Выбери действие:"
                     
-                    logger.info(f"📝 Пытаюсь обновить сообщение {msg_id}")
-                    response = tg_edit_message_text(chat_id, msg_id, new_text, json.dumps(keyboard), 'HTML')
-                    logger.info(f"📝 Результат: {response.status_code}")
+                    response = tg_edit_message_text(chat_id, msg_id, new_text, json.dumps(keyboard))
                     if response.status_code == 200:
-                        logger.info("✅ Сообщение обновлено успешно")
+                        logger.info("✅ Сообщение обновлено")
                     else:
                         logger.error(f"❌ Ошибка: {response.text}")
                 else:
@@ -266,8 +257,8 @@ def process_update(update_json):
                         
                         tg_edit_message_text(
                             chat_id, msg_id,
-                            f"<b>{title}</b>\n\n{content}\n\nФото: {'✅ есть' if post_data.get('photo_file_id') else '❌ нет'}",
-                            json.dumps(keyboard), 'HTML'
+                            f"Заголовок: {title}\n\nТекст: {content}\n\nФото: {'есть' if post_data.get('photo_file_id') else 'нет'}",
+                            json.dumps(keyboard)
                         )
                     else:
                         tg_edit_message_text(chat_id, msg_id, "❌ Ошибка ИИ")
@@ -379,12 +370,12 @@ def process_update(update_json):
             
             tg_send_message(
                 chat_id,
-                f"📢 <b>Пост получен!</b>\n\n"
-                f"<b>{title}</b>\n\n"
-                f"{content[:300]}...\n\n"
-                f"Фото: {'✅ есть' if photo_file_id else '❌ нет'}\n\n"
-                f"📂 <b>Выбери раздел для публикации:</b>",
-                json.dumps(keyboard), 'HTML'
+                f"📢 Пост получен!\n\n"
+                f"Заголовок: {title}\n\n"
+                f"Текст: {content[:300]}...\n\n"
+                f"Фото: {'есть' if photo_file_id else 'нет'}\n\n"
+                f"📂 Выбери раздел для публикации:",
+                json.dumps(keyboard)
             )
             logger.info(f"✉️ Отправлен выбор раздела, post_key={post_key}")
             
