@@ -125,58 +125,115 @@ def process_text_with_deepseek(text):
         return None
 
 def download_and_upload_photo(file_id):
+    """Загрузка фото в WordPress"""
     try:
+        logger.info(f"📸 НАЧАЛО ЗАГРУЗКИ ФОТО: file_id={file_id}")
+        
+        # Шаг 1: Получаем путь к файлу
         get_file_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile"
         file_response = requests.get(get_file_url, params={'file_id': file_id}, timeout=30)
+        
         if file_response.status_code != 200:
+            logger.error(f"❌ Ошибка getFile: {file_response.status_code}")
             return None
+        
         result = file_response.json().get('result')
         if not result:
+            logger.error("❌ Не получен result от Telegram")
             return None
+        
         file_path = result.get('file_path')
         if not file_path:
+            logger.error("❌ Не получен file_path")
             return None
+        
+        logger.info(f"✅ file_path получен: {file_path}")
+        
+        # Шаг 2: Скачиваем фото
         photo_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
+        logger.info(f"📸 Скачиваю фото: {photo_url[:80]}...")
+        
         photo_response = requests.get(photo_url, timeout=60)
         if photo_response.status_code != 200:
+            logger.error(f"❌ Ошибка скачивания фото: {photo_response.status_code}")
             return None
+        
+        logger.info(f"✅ Фото скачано, размер: {len(photo_response.content)} байт")
+        
+        # Шаг 3: Загружаем в WordPress
+        wp_headers = {
+            'Content-Disposition': f'attachment; filename="telegram_photo_{int(time.time())}.jpg"',
+            'Content-Type': 'image/jpeg'
+        }
+        
+        logger.info(f"📸 Загружаю фото в WordPress...")
+        
         wp_response = wp_session.post(
             WP_MEDIA_URL,
             auth=(WP_USERNAME, WP_PASSWORD),
-            headers={'Content-Disposition': f'attachment; filename="photo_{int(time.time())}.jpg"'},
+            headers=wp_headers,
             data=photo_response.content,
             timeout=60
         )
+        
+        logger.info(f"📸 Ответ WP: статус {wp_response.status_code}")
+        
         if wp_response.status_code == 201:
-            return wp_response.json()['id']
+            media_id = wp_response.json()['id']
+            source_url = wp_response.json().get('source_url', 'unknown')
+            logger.info(f"✅ Фото загружено! ID={media_id}, URL={source_url}")
+            return media_id
+        else:
+            logger.error(f"❌ Ошибка WP при загрузке фото: {wp_response.status_code}")
+            logger.error(f"Ответ: {wp_response.text[:200]}")
+            return None
+            
     except Exception as e:
-        logger.error(f"Ошибка фото: {e}")
-    return None
+        logger.error(f"❌ Ошибка фото: {e}")
+        return None
 
 def create_wp_post(title, content, post_type, media_id=None, publish=False):
+    """Создание поста в WordPress"""
     status = 'publish' if publish else 'draft'
+    
     post_data = {
         'title': title,
         'content': content,
         'status': status,
         'type': post_type,
     }
+    
     if media_id:
         post_data['featured_media'] = media_id
+        logger.info(f"📎 Прикрепляю фото ID={media_id} к посту")
+    else:
+        logger.warning("⚠️ Пост будет без фото")
+    
     try:
+        logger.info(f"📤 Отправка в WordPress: раздел={post_type}, статус={status}")
+        
         response = wp_session.post(
             f"{WP_API_URL}/{post_type}",
             auth=(WP_USERNAME, WP_PASSWORD),
             json=post_data,
             timeout=60
         )
+        
+        logger.info(f"📤 Ответ WP: {response.status_code}")
+        
         if response.status_code == 201:
-            return True, response.json()['link']
+            post_link = response.json()['link']
+            logger.info(f"✅ Пост создан: {post_link}")
+            if media_id:
+                logger.info(f"✅ Фото ID={media_id} прикреплено")
+            return True, post_link
         else:
-            logger.error(f"Ошибка: {response.status_code}")
+            logger.error(f"❌ Ошибка: {response.status_code}")
+            logger.error(f"Ответ: {response.text[:200]}")
             return False, None
+            
     except Exception as e:
-        logger.error(f"Ошибка: {e}")
+        logger.error(f"❌ Ошибка: {e}")
         return False, None
 
 def process_update(update_json):
@@ -202,12 +259,9 @@ def process_update(update_json):
                 post_type = parts[2]
                 post_data = pending_posts.get(post_key)
                 
-                logger.info(f"🔘 Выбран раздел: {post_type}")
-                
                 if post_data:
                     post_data['post_type'] = post_type
                     
-                    # Кнопки после выбора раздела (без HTML)
                     keyboard = {
                         "inline_keyboard": [
                             [{"text": "🤖 Переделать текст через ИИ", "callback_data": f"ai|{post_key}"}],
@@ -223,13 +277,7 @@ def process_update(update_json):
                     new_text += f"Фото: {'есть' if post_data.get('photo_file_id') else 'нет'}\n\n"
                     new_text += "Выбери действие:"
                     
-                    response = tg_edit_message_text(chat_id, msg_id, new_text, json.dumps(keyboard))
-                    if response.status_code == 200:
-                        logger.info("✅ Сообщение обновлено")
-                    else:
-                        logger.error(f"❌ Ошибка: {response.text}")
-                else:
-                    logger.error(f"❌ Пост не найден: {post_key}")
+                    tg_edit_message_text(chat_id, msg_id, new_text, json.dumps(keyboard))
                 return
             
             # Обработка через ИИ
@@ -282,6 +330,12 @@ def process_update(update_json):
                 media_id = None
                 if post_data.get('photo_file_id'):
                     media_id = download_and_upload_photo(post_data['photo_file_id'])
+                    if media_id:
+                        logger.info(f"✅ Фото загружено с ID={media_id}")
+                    else:
+                        logger.error("❌ Фото НЕ загрузилось!")
+                else:
+                    logger.info("📸 Нет фото для загрузки")
                 
                 success, link = create_wp_post(
                     post_data['title'],
@@ -361,7 +415,6 @@ def process_update(update_json):
                 'content': formatted_content
             }
             
-            # Кнопки выбора раздела
             keyboard = {
                 "inline_keyboard": []
             }
@@ -377,7 +430,7 @@ def process_update(update_json):
                 f"📂 Выбери раздел для публикации:",
                 json.dumps(keyboard)
             )
-            logger.info(f"✉️ Отправлен выбор раздела, post_key={post_key}")
+            logger.info(f"✉️ Отправлен выбор раздела, фото={photo_file_id is not None}")
             
     except Exception as e:
         logger.error(f"Ошибка: {e}")
