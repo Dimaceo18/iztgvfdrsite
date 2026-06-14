@@ -28,6 +28,16 @@ DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
 WP_API_URL = f"{WP_URL}/wp-json/wp/v2"
 WP_MEDIA_URL = f"{WP_URL}/wp-json/wp/v2/media"
 
+# Доступные разделы (типы записей)
+POST_TYPES = {
+    "news": "📰 Новости",
+    "auto": "🚗 Авто",
+    "afisha": "🎭 Афиша",
+    "realt": "🏠 Недвижимость",
+    "sales": "🏷️ Скидки/Распродажи",
+    "sport": "⚽ Спорт"
+}
+
 app = Flask(__name__)
 wp_session = requests.Session()
 
@@ -179,15 +189,15 @@ def download_and_upload_photo(file_id):
         logger.error(f"Ошибка фото: {e}")
         return None
 
-def create_wp_post(title, content, media_id=None, publish=False):
-    """Создание поста в WordPress (draft или publish)"""
+def create_wp_post(title, content, post_type, media_id=None, publish=False):
+    """Создание поста в WordPress в указанном разделе"""
     status = 'publish' if publish else 'draft'
     
     post_data = {
         'title': title,
         'content': content,
         'status': status,
-        'type': 'news',
+        'type': post_type,
     }
     
     if media_id:
@@ -200,10 +210,10 @@ def create_wp_post(title, content, media_id=None, publish=False):
             'Content-Type': 'application/json',
         }
         
-        logger.info(f"📤 Отправка в WordPress (статус: {status})...")
+        logger.info(f"📤 Отправка в WordPress: раздел={post_type}, статус={status}")
         
         response = wp_session.post(
-            f"{WP_API_URL}/news",
+            f"{WP_API_URL}/{post_type}",
             auth=(WP_USERNAME, WP_PASSWORD),
             json=post_data,
             headers=headers,
@@ -212,7 +222,7 @@ def create_wp_post(title, content, media_id=None, publish=False):
         
         if response.status_code == 201:
             post_link = response.json()['link']
-            logger.info(f"✅ Пост создан (статус: {status}): {post_link}")
+            logger.info(f"✅ Пост создан: {post_link}")
             return True, post_link
         else:
             logger.error(f"❌ Ошибка: {response.status_code}")
@@ -236,43 +246,119 @@ def process_update(update_json):
             
             tg_answer_callback_query(callback_id)
             
-            action, post_key = data.split('_')
-            post_data = pending_posts.get(post_key)
+            parts = data.split('_')
+            action = parts[0]
             
-            if not post_data:
-                tg_edit_message_text(chat_id, msg_id, "❌ Пост не найден.")
-                return
-            
-            # Обработка через ИИ
-            if action == 'ai':
-                tg_edit_message_text(chat_id, msg_id, "🤖 Обрабатываю текст через ИИ...")
-                processed = process_text_with_deepseek(post_data['original_text'])
+            # Выбор раздела
+            if action == 'select_post_type':
+                post_key = parts[1]
+                post_type = parts[2]
+                post_data = pending_posts.get(post_key)
                 
-                if processed:
-                    title, content = extract_title_and_content(processed)
-                    formatted_content = format_content_for_wp(content)
-                    post_data['title'] = title
-                    post_data['content'] = formatted_content
+                if post_data:
+                    post_data['post_type'] = post_type
                     
+                    # Показываем финальные кнопки
                     keyboard = {
                         "inline_keyboard": [
                             [{"text": "✅ Опубликовать на сайт", "callback_data": f"publish_{post_key}"}],
                             [{"text": "📝 В черновики", "callback_data": f"draft_{post_key}"}],
-                            [{"text": "🔄 Ещё раз через ИИ", "callback_data": f"ai_{post_key}"}]
+                            [{"text": "🔄 Выбрать другой раздел", "callback_data": f"back_to_sections_{post_key}"}],
+                            [{"text": "🤖 Обработать через ИИ", "callback_data": f"ai_{post_key}"}]
                         ]
                     }
                     
+                    section_name = POST_TYPES.get(post_type, post_type)
                     tg_edit_message_text(
                         chat_id, msg_id,
-                        f"<b>{title}</b>\n\n{content}\n\nФото: {'✅ есть' if post_data.get('photo_file_id') else '❌ нет'}",
+                        f"✅ Выбран раздел: {section_name}\n\n"
+                        f"<b>{post_data.get('title', 'Без заголовка')}</b>\n\n"
+                        f"{post_data.get('content', '')[:200]}...\n\n"
+                        f"Фото: {'✅ есть' if post_data.get('photo_file_id') else '❌ нет'}\n\n"
+                        f"<i>Выбери действие:</i>",
                         json.dumps(keyboard), 'HTML'
                     )
-                else:
-                    tg_edit_message_text(chat_id, msg_id, "❌ Ошибка ИИ")
+                return
+            
+            # Показать список разделов
+            if action == 'back_to_sections':
+                post_key = parts[1]
+                post_data = pending_posts.get(post_key)
+                
+                if post_data:
+                    keyboard = {
+                        "inline_keyboard": []
+                    }
+                    for pt_key, pt_name in POST_TYPES.items():
+                        keyboard["inline_keyboard"].append([{"text": pt_name, "callback_data": f"select_post_type_{post_key}_{pt_key}"}])
+                    
+                    tg_edit_message_text(
+                        chat_id, msg_id,
+                        f"📂 <b>Выбери раздел для публикации:</b>\n\n"
+                        f"Заголовок: {post_data.get('title', 'Без заголовка')[:50]}",
+                        json.dumps(keyboard), 'HTML'
+                    )
+                return
+            
+            # Обработка через ИИ
+            if action == 'ai':
+                post_key = parts[1]
+                post_data = pending_posts.get(post_key)
+                
+                if post_data:
+                    tg_edit_message_text(chat_id, msg_id, "🤖 Обрабатываю текст через ИИ...")
+                    processed = process_text_with_deepseek(post_data['original_text'])
+                    
+                    if processed:
+                        title, content = extract_title_and_content(processed)
+                        formatted_content = format_content_for_wp(content)
+                        post_data['title'] = title
+                        post_data['content'] = formatted_content
+                        
+                        # Показываем выбор раздела после ИИ
+                        keyboard = {
+                            "inline_keyboard": []
+                        }
+                        for pt_key, pt_name in POST_TYPES.items():
+                            keyboard["inline_keyboard"].append([{"text": pt_name, "callback_data": f"select_post_type_{post_key}_{pt_key}"}])
+                        
+                        tg_edit_message_text(
+                            chat_id, msg_id,
+                            f"🤖 Текст обработан!\n\n"
+                            f"<b>{title}</b>\n\n"
+                            f"{content[:300]}...\n\n"
+                            f"📂 <b>Выбери раздел для публикации:</b>",
+                            json.dumps(keyboard), 'HTML'
+                        )
+                    else:
+                        tg_edit_message_text(chat_id, msg_id, "❌ Ошибка ИИ")
                 return
             
             # Публикация или черновик
             if action == 'publish' or action == 'draft':
+                post_key = parts[1]
+                post_data = pending_posts.get(post_key)
+                
+                if not post_data:
+                    tg_edit_message_text(chat_id, msg_id, "❌ Пост не найден.")
+                    return
+                
+                if not post_data.get('post_type'):
+                    # Если раздел не выбран, показываем список
+                    keyboard = {
+                        "inline_keyboard": []
+                    }
+                    for pt_key, pt_name in POST_TYPES.items():
+                        keyboard["inline_keyboard"].append([{"text": pt_name, "callback_data": f"select_post_type_{post_key}_{pt_key}"}])
+                    
+                    tg_edit_message_text(
+                        chat_id, msg_id,
+                        f"📂 <b>Сначала выбери раздел!</b>\n\n"
+                        f"Заголовок: {post_data.get('title', 'Без заголовка')[:50]}",
+                        json.dumps(keyboard), 'HTML'
+                    )
+                    return
+                
                 is_publish = (action == 'publish')
                 status_text = "опубликован на сайте" if is_publish else "сохранен в черновиках"
                 
@@ -287,12 +373,13 @@ def process_update(update_json):
                 success, link = create_wp_post(
                     post_data['title'],
                     post_data['content'],
+                    post_data['post_type'],
                     media_id,
-                    is_publish  # True = publish, False = draft
+                    is_publish
                 )
                 
                 if success:
-                    tg_edit_message_text(chat_id, msg_id, f"✅ {status_text}!\n\n{link}")
+                    tg_edit_message_text(chat_id, msg_id, f"✅ {status_text} в разделе {POST_TYPES.get(post_data['post_type'], post_data['post_type'])}!\n\n{link}")
                 else:
                     tg_edit_message_text(chat_id, msg_id, f"❌ Ошибка {status_text}")
                 
@@ -315,25 +402,34 @@ def process_update(update_json):
                 tg_send_message(chat_id, "❌ Отправьте текст новости.\nПервая строка будет заголовком.")
                 return
             
+            title, content = extract_title_and_content(text)
+            formatted_content = format_content_for_wp(content)
+            
             post_key = str(int(time.time() * 1000))
             pending_posts[post_key] = {
                 'original_text': text,
-                'photo_file_id': photo_file_id
+                'photo_file_id': photo_file_id,
+                'title': title,
+                'content': formatted_content
             }
             
+            # Показываем выбор раздела
             keyboard = {
-                "inline_keyboard": [
-                    [{"text": "🤖 Обработать через ИИ", "callback_data": f"ai_{post_key}"}],
-                    [{"text": "📝 В черновики", "callback_data": f"draft_{post_key}"}]
-                ]
+                "inline_keyboard": []
             }
+            for pt_key, pt_name in POST_TYPES.items():
+                keyboard["inline_keyboard"].append([{"text": pt_name, "callback_data": f"select_post_type_{post_key}_{pt_key}"}])
             
             tg_send_message(
                 chat_id,
-                f"📢 Пост получен!\n\nФото: {'✅ есть' if photo_file_id else '❌ нет'}\n\nВыбери действие:",
-                json.dumps(keyboard)
+                f"📢 <b>Пост получен!</b>\n\n"
+                f"<b>{title}</b>\n\n"
+                f"{content[:200]}...\n\n"
+                f"Фото: {'✅ есть' if photo_file_id else '❌ нет'}\n\n"
+                f"📂 <b>Выбери раздел для публикации:</b>",
+                json.dumps(keyboard), 'HTML'
             )
-            logger.info(f"✉️ Отправлены кнопки")
+            logger.info(f"✉️ Отправлен выбор раздела")
             
     except Exception as e:
         logger.error(f"Ошибка: {e}")
@@ -366,6 +462,7 @@ if __name__ == '__main__':
     logger.info(f"📢 Канал: {CHANNEL_ID}")
     logger.info(f"👤 Админ ID: {ADMIN_ID}")
     logger.info(f"🤖 DeepSeek: {'✅' if DEEPSEEK_API_KEY else '❌'}")
+    logger.info(f"📂 Доступные разделы: {', '.join(POST_TYPES.values())}")
     
     requests.post(f"{TG_API_URL}/deleteWebhook")
     requests.post(f"{TG_API_URL}/setWebhook", json={'url': webhook_url})
