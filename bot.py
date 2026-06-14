@@ -117,7 +117,7 @@ def process_text_with_deepseek(text):
         return None
 
 def download_and_upload_photo(file_id):
-    """РАБОЧАЯ загрузка фото из Telegram в WordPress"""
+    """Загрузка фото в WordPress"""
     try:
         get_file_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile"
         file_response = requests.get(get_file_url, params={'file_id': file_id}, timeout=30)
@@ -179,12 +179,14 @@ def download_and_upload_photo(file_id):
         logger.error(f"Ошибка фото: {e}")
         return None
 
-def create_wp_draft(title, content, media_id=None):
-    """Создание черновика в WordPress (РАБОТАЕТ)"""
+def create_wp_post(title, content, media_id=None, publish=False):
+    """Создание поста в WordPress (draft или publish)"""
+    status = 'publish' if publish else 'draft'
+    
     post_data = {
         'title': title,
         'content': content,
-        'status': 'draft',
+        'status': status,
         'type': 'news',
     }
     
@@ -198,7 +200,7 @@ def create_wp_draft(title, content, media_id=None):
             'Content-Type': 'application/json',
         }
         
-        logger.info(f"Отправка в WordPress...")
+        logger.info(f"📤 Отправка в WordPress (статус: {status})...")
         
         response = wp_session.post(
             f"{WP_API_URL}/news",
@@ -210,14 +212,15 @@ def create_wp_draft(title, content, media_id=None):
         
         if response.status_code == 201:
             post_link = response.json()['link']
-            logger.info(f"✅ Пост создан: {post_link}")
+            logger.info(f"✅ Пост создан (статус: {status}): {post_link}")
             return True, post_link
         else:
-            logger.error(f"Ошибка: {response.status_code}")
+            logger.error(f"❌ Ошибка: {response.status_code}")
+            logger.error(f"Ответ: {response.text[:200]}")
             return False, None
             
     except Exception as e:
-        logger.error(f"Ошибка: {e}")
+        logger.error(f"❌ Ошибка: {e}")
         return False, None
 
 def process_update(update_json):
@@ -268,9 +271,10 @@ def process_update(update_json):
                     tg_edit_message_text(chat_id, msg_id, "❌ Ошибка ИИ")
                 return
             
-            # Публикация
+            # Публикация или черновик
             if action == 'publish' or action == 'draft':
-                status_text = "опубликован" if action == 'publish' else "сохранен в черновиках"
+                is_publish = (action == 'publish')
+                status_text = "опубликован на сайте" if is_publish else "сохранен в черновиках"
                 
                 tg_edit_message_text(chat_id, msg_id, f"⏳ {status_text}...")
                 
@@ -280,14 +284,15 @@ def process_update(update_json):
                     if media_id:
                         logger.info(f"✅ Фото загружено, ID: {media_id}")
                 
-                success, link = create_wp_draft(
+                success, link = create_wp_post(
                     post_data['title'],
                     post_data['content'],
-                    media_id
+                    media_id,
+                    is_publish  # True = publish, False = draft
                 )
                 
                 if success:
-                    tg_edit_message_text(chat_id, msg_id, f"✅ Пост {status_text}!\n\n{link}")
+                    tg_edit_message_text(chat_id, msg_id, f"✅ {status_text}!\n\n{link}")
                 else:
                     tg_edit_message_text(chat_id, msg_id, f"❌ Ошибка {status_text}")
                 
@@ -307,7 +312,7 @@ def process_update(update_json):
             photo_file_id = message['photo'][-1]['file_id'] if 'photo' in message else None
             
             if not text:
-                tg_send_message(chat_id, "❌ Отправьте текст новости.")
+                tg_send_message(chat_id, "❌ Отправьте текст новости.\nПервая строка будет заголовком.")
                 return
             
             post_key = str(int(time.time() * 1000))
@@ -319,7 +324,7 @@ def process_update(update_json):
             keyboard = {
                 "inline_keyboard": [
                     [{"text": "🤖 Обработать через ИИ", "callback_data": f"ai_{post_key}"}],
-                    [{"text": "📝 Без ИИ (сразу в черновики)", "callback_data": f"draft_{post_key}"}]
+                    [{"text": "📝 В черновики", "callback_data": f"draft_{post_key}"}]
                 ]
             }
             
@@ -362,7 +367,6 @@ if __name__ == '__main__':
     logger.info(f"👤 Админ ID: {ADMIN_ID}")
     logger.info(f"🤖 DeepSeek: {'✅' if DEEPSEEK_API_KEY else '❌'}")
     
-    # Установка вебхука
     requests.post(f"{TG_API_URL}/deleteWebhook")
     requests.post(f"{TG_API_URL}/setWebhook", json={'url': webhook_url})
     logger.info("✅ Вебхук установлен")
