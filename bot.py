@@ -81,26 +81,30 @@ def extract_title_and_content(text):
     content = '\n'.join(lines[1:]).strip() if len(lines) > 1 else ""
     return title, content
 
-def format_content_for_wp(text, video_url=None):
-    """Форматирование контента для WordPress с поддержкой видео"""
+def format_content_for_wp(text, video_html=None):
+    """Форматирование контента - убираем лишние пустые строки"""
     if not text:
         return ""
     
-    # Разбиваем на абзацы
-    paragraphs = text.split('\n')
+    # Разбиваем на абзацы по пустым строкам, но убираем множественные пустые строки
+    paragraphs = re.split(r'\n\s*\n', text.strip())
     formatted = []
     
     for para in paragraphs:
         para = para.strip()
         if para:
+            # Заменяем переносы строк внутри абзаца на пробелы
+            para = re.sub(r'\n', ' ', para)
+            # Обрабатываем ссылки
             para = re.sub(r'(https?://[^\s]+)', r'<a href="\1">\1</a>', para)
+            # Обрабатываем **жирный**
             para = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', para)
+            # Обрабатываем *курсив*
             para = re.sub(r'\*(.+?)\*', r'<em>\1</em>', para)
             formatted.append(f'<p>{para}</p>')
     
-    # Вставляем видео после первого абзаца
-    if video_url and len(formatted) > 0:
-        video_html = f'<video controls width="100%"><source src="{video_url}" type="video/mp4"></video>'
+    # Вставляем видео после первого абзаца, если есть
+    if video_html and len(formatted) > 0:
         formatted.insert(1, video_html)
     
     return '\n'.join(formatted)
@@ -173,7 +177,7 @@ def download_and_upload_media(file_id, is_video=False):
         ext = 'mp4' if is_video else 'jpg'
         mime = 'video/mp4' if is_video else 'image/jpeg'
         files = {
-            'file': (f'{media_type}_{int(time.time())}.{ext}', media_response.content, mime)
+            'file': (f'media_{int(time.time())}.{ext}', media_response.content, mime)
         }
         
         logger.info(f"📸 Загружаю {media_type} в WordPress...")
@@ -206,8 +210,12 @@ def create_wp_post(title, content, post_type, media_id=None, video_url=None, pub
     
     # Форматируем контент
     final_content = content
+    video_html = None
+    
     if is_video and video_url:
-        final_content = format_content_for_wp(content, video_url)
+        # Простой HTML5 видео тег (работает)
+        video_html = f'<video controls width="100%"><source src="{video_url}" type="video/mp4"></video>'
+        final_content = format_content_for_wp(content, video_html)
         logger.info(f"🎬 Видео вставлено в контент")
     
     post_data = {
