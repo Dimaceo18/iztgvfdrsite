@@ -125,7 +125,7 @@ def process_text_with_deepseek(text):
         return None
 
 def download_and_upload_media(file_id, is_video=False):
-    """Загрузка фото или видео в WordPress (с исправленной кодировкой)"""
+    """Загрузка фото или видео в WordPress (исправленная версия)"""
     try:
         media_type = "видео" if is_video else "фото"
         logger.info(f"📸 НАЧАЛО ЗАГРУЗКИ {media_type.upper()}: file_id={file_id}")
@@ -161,30 +161,20 @@ def download_and_upload_media(file_id, is_video=False):
         
         logger.info(f"✅ {media_type.capitalize()} скачано, размер: {len(media_response.content)} байт")
         
-        # Шаг 3: Определяем MIME тип и расширение (только латиница)
-        if is_video:
-            content_type = 'video/mp4'
-            extension = 'mp4'
-        else:
-            content_type = 'image/jpeg'
-            extension = 'jpg'
-        
-        # Имя файла только из латиницы и цифр (без русских символов)
-        filename = f"telegram_{media_type}_{int(time.time())}.{extension}"
-        
-        # Шаг 4: Загружаем в WordPress
-        wp_headers = {
-            'Content-Disposition': f'attachment; filename="{filename}"',
-            'Content-Type': content_type
+        # Шаг 3: Загружаем в WordPress через multipart/form-data (более надёжный способ)
+        # Используем файл напрямую, без Content-Disposition в заголовках
+        files = {
+            'file': (f'video_{int(time.time())}.mp4' if is_video else f'photo_{int(time.time())}.jpg', 
+                     media_response.content, 
+                     'video/mp4' if is_video else 'image/jpeg')
         }
         
-        logger.info(f"📸 Загружаю {media_type} в WordPress...")
+        logger.info(f"📸 Загружаю {media_type} в WordPress через multipart...")
         
         wp_response = wp_session.post(
             WP_MEDIA_URL,
             auth=(WP_USERNAME, WP_PASSWORD),
-            headers=wp_headers,
-            data=media_response.content,
+            files=files,
             timeout=120
         )
         
@@ -496,7 +486,7 @@ if __name__ == '__main__':
     logger.info(f"👤 Админ ID: {ADMIN_ID}")
     logger.info(f"🤖 DeepSeek: {'✅' if DEEPSEEK_API_KEY else '❌'}")
     logger.info(f"📂 Доступные разделы: {', '.join(POST_TYPES.values())}")
-    logger.info(f"🎬 Поддержка видео: ✅")
+    logger.info(f"🎬 Поддержка видео: ✅ (multipart upload)")
     
     requests.post(f"{TG_API_URL}/deleteWebhook")
     requests.post(f"{TG_API_URL}/setWebhook", json={'url': webhook_url})
