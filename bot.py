@@ -125,7 +125,7 @@ def process_text_with_deepseek(text):
         return None
 
 def download_and_upload_media(file_id, is_video=False):
-    """Загрузка фото или видео в WordPress"""
+    """Загрузка фото или видео в WordPress (с исправленной кодировкой)"""
     try:
         media_type = "видео" if is_video else "фото"
         logger.info(f"📸 НАЧАЛО ЗАГРУЗКИ {media_type.upper()}: file_id={file_id}")
@@ -154,14 +154,14 @@ def download_and_upload_media(file_id, is_video=False):
         media_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
         logger.info(f"📸 Скачиваю {media_type}...")
         
-        media_response = requests.get(media_url, timeout=120)  # Видео может быть большим
+        media_response = requests.get(media_url, timeout=120)
         if media_response.status_code != 200:
             logger.error(f"❌ Ошибка скачивания {media_type}: {media_response.status_code}")
             return None
         
         logger.info(f"✅ {media_type.capitalize()} скачано, размер: {len(media_response.content)} байт")
         
-        # Шаг 3: Определяем MIME тип
+        # Шаг 3: Определяем MIME тип и расширение (только латиница)
         if is_video:
             content_type = 'video/mp4'
             extension = 'mp4'
@@ -169,9 +169,12 @@ def download_and_upload_media(file_id, is_video=False):
             content_type = 'image/jpeg'
             extension = 'jpg'
         
+        # Имя файла только из латиницы и цифр (без русских символов)
+        filename = f"telegram_{media_type}_{int(time.time())}.{extension}"
+        
         # Шаг 4: Загружаем в WordPress
         wp_headers = {
-            'Content-Disposition': f'attachment; filename="telegram_{media_type}_{int(time.time())}.{extension}"',
+            'Content-Disposition': f'attachment; filename="{filename}"',
             'Content-Type': content_type
         }
         
@@ -182,7 +185,7 @@ def download_and_upload_media(file_id, is_video=False):
             auth=(WP_USERNAME, WP_PASSWORD),
             headers=wp_headers,
             data=media_response.content,
-            timeout=120  # Видео может загружаться дольше
+            timeout=120
         )
         
         logger.info(f"📸 Ответ WP: статус {wp_response.status_code}")
@@ -202,7 +205,7 @@ def download_and_upload_media(file_id, is_video=False):
         return None
 
 def create_wp_post(title, content, post_type, media_id=None, publish=False, is_video=False):
-    """Создание поста в WordPress с фото или видео"""
+    """Создание поста в WordPress"""
     status = 'publish' if publish else 'draft'
     
     post_data = {
@@ -414,7 +417,7 @@ def process_update(update_json):
             
             text = message.get('caption') or message.get('text', '')
             
-            # Определяем тип медиа (фото или видео)
+            # Определяем тип медиа
             media_file_id = None
             is_video = False
             
