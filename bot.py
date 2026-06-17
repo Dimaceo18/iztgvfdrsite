@@ -82,27 +82,29 @@ def extract_title_and_content(text):
     return title, content
 
 def format_content_for_wp(text, video_url=None):
-    """Форматирование контента для WordPress с вставкой видео после первого абзаца (БЕЗ ПУСТЫХ АБЗАЦЕВ)"""
+    """Форматирование контента для WordPress - убираем все пустые строки"""
     if not text:
         return ""
     
-    # Разбиваем текст на строки и убираем пустые
-    lines = text.split('\n')
+    # Убираем множественные переносы строк, оставляем только по одному
+    text = re.sub(r'\n\s*\n', '\n', text)
+    
+    # Разбиваем на строки и убираем пустые
+    lines = [line.strip() for line in text.split('\n') if line.strip()]
+    
     formatted = []
     video_inserted = False
     
     for i, line in enumerate(lines):
-        line = line.strip()
-        if line:  # Пропускаем пустые строки
-            line = re.sub(r'(https?://[^\s]+)', r'<a href="\1">\1</a>', line)
-            line = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', line)
-            line = re.sub(r'\*(.+?)\*', r'<em>\1</em>', line)
-            formatted.append(f'<p>{line}</p>')
-            
-            # Вставляем видео после первого абзаца (только один раз)
-            if i == 0 and video_url and not video_inserted:
-                formatted.append(f'[video width="100%" height="auto" mp4="{video_url}"]')
-                video_inserted = True
+        line = re.sub(r'(https?://[^\s]+)', r'<a href="\1">\1</a>', line)
+        line = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', line)
+        line = re.sub(r'\*(.+?)\*', r'<em>\1</em>', line)
+        formatted.append(f'<p>{line}</p>')
+        
+        # Вставляем видео после первого абзаца
+        if i == 0 and video_url and not video_inserted:
+            formatted.append(f'[video width="100%" height="auto" mp4="{video_url}"]')
+            video_inserted = True
     
     return '\n'.join(formatted)
 
