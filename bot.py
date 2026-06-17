@@ -100,8 +100,16 @@ def format_content_for_wp(text, video_url=None):
     
     # Вставляем видео после первого абзаца
     if video_url and len(formatted) > 0:
-        video_html = f'<video controls width="100%"><source src="{video_url}" type="video/mp4"></video>'
-        formatted.insert(1, video_html)
+        # Используем тег video с правильными параметрами
+        video_html = f'''
+        <figure class="wp-block-video">
+            <video controls="controls" width="100%" style="max-width:100%;">
+                <source src="{video_url}" type="video/mp4">
+                Ваш браузер не поддерживает видео.
+            </video>
+        </figure>
+        '''
+        formatted.insert(1, video_html.strip())
         logger.info(f"🎬 Видео вставлено в контент: {video_url}")
     
     return '\n'.join(formatted)
@@ -139,45 +147,35 @@ def download_and_upload_video(file_id):
     """Скачивание и загрузка видео в WordPress"""
     try:
         logger.info(f"🎬 НАЧАЛО ЗАГРУЗКИ ВИДЕО: file_id={file_id}")
-        logger.info(f"📎 Тип file_id: {type(file_id)}, длина: {len(file_id) if file_id else 0}")
         
-        # Шаг 1: Получаем путь к файлу
-        get_file_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile"
-        logger.info(f"📤 Запрос к Telegram: {get_file_url}?file_id={file_id[:30]}...")
+        get_file = requests.get(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile",
+            params={'file_id': file_id},
+            timeout=30
+        )
         
-        file_response = requests.get(get_file_url, params={'file_id': file_id}, timeout=30)
-        
-        logger.info(f"📥 Ответ Telegram: статус {file_response.status_code}")
-        
-        if file_response.status_code != 200:
-            logger.error(f"❌ Ошибка getFile: {file_response.status_code}")
-            logger.error(f"Ответ: {file_response.text[:200]}")
+        if get_file.status_code != 200:
+            logger.error(f"❌ Ошибка getFile: {get_file.status_code}")
             return None, None
         
-        result = file_response.json().get('result')
-        if not result:
-            logger.error("❌ Не получен result от Telegram")
-            return None, None
-        
-        file_path = result.get('file_path')
+        file_path = get_file.json().get('result', {}).get('file_path')
         if not file_path:
             logger.error("❌ Не получен file_path")
             return None, None
         
         logger.info(f"✅ file_path получен: {file_path}")
         
-        # Шаг 2: Скачиваем видео
+        # Скачиваем видео
         video_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
-        logger.info(f"📸 Скачиваю видео...")
-        
         video_response = requests.get(video_url, timeout=120)
+        
         if video_response.status_code != 200:
             logger.error(f"❌ Ошибка скачивания: {video_response.status_code}")
             return None, None
         
         logger.info(f"✅ Видео скачано, размер: {len(video_response.content)} байт")
         
-        # Шаг 3: Загружаем в WordPress
+        # Загружаем в WordPress через multipart/form-data
         files = {
             'file': (f'video_{int(time.time())}.mp4', video_response.content, 'video/mp4')
         }
@@ -200,13 +198,10 @@ def download_and_upload_video(file_id):
             return media_id, source_url
         else:
             logger.error(f"❌ Ошибка WP: {wp_response.status_code}")
-            logger.error(f"Ответ: {wp_response.text[:200]}")
             return None, None
             
     except Exception as e:
-        logger.error(f"❌ Ошибка загрузки видео: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"❌ Ошибка: {e}")
         return None, None
 
 def create_wp_post(title, content, post_type, media_id=None, video_url=None, publish=False):
@@ -217,7 +212,6 @@ def create_wp_post(title, content, post_type, media_id=None, video_url=None, pub
     final_content = content
     if video_url:
         final_content = format_content_for_wp(content, video_url)
-        logger.info(f"🎬 Видео URL вставлен в контент: {video_url}")
     
     post_data = {
         'title': title,
@@ -240,15 +234,12 @@ def create_wp_post(title, content, post_type, media_id=None, video_url=None, pub
             timeout=60
         )
         
-        logger.info(f"📤 Ответ WP: {response.status_code}")
-        
         if response.status_code == 201:
             post_link = response.json()['link']
             logger.info(f"✅ Пост создан: {post_link}")
             return True, post_link
         else:
             logger.error(f"❌ Ошибка: {response.status_code}")
-            logger.error(f"Ответ: {response.text[:200]}")
             return False, None
             
     except Exception as e:
@@ -353,10 +344,9 @@ def process_update(update_json):
                 if post_data.get('is_video') and post_data.get('media_file_id'):
                     media_id, video_url = download_and_upload_video(post_data['media_file_id'])
                     if media_id:
-                        logger.info(f"✅ Видео загружено! ID={media_id}, URL={video_url}")
+                        logger.info(f"✅ Видео загружено!")
                     else:
                         logger.error("❌ Видео НЕ загрузилось!")
-                        tg_edit_message_text(chat_id, msg_id, "⚠️ Видео не загрузилось, публикую без видео")
                 
                 success, link = create_wp_post(
                     post_data['title'],
