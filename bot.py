@@ -86,7 +86,7 @@ def format_content_for_wp(text, video_url=None):
     if not text:
         return ""
     
-    # Убираем множественные переносы строк, оставляем только по одному
+    # Убираем множественные переносы строк
     text = re.sub(r'\n\s*\n', '\n', text)
     
     # Разбиваем на строки и убираем пустые
@@ -205,7 +205,7 @@ def download_and_upload_media(file_id, is_video=False):
         return None, None
 
 def create_wp_post(title, content, post_type, media_id=None, video_url=None, publish=False, is_video=False):
-    """Создание поста в WordPress с видео в контенте"""
+    """Создание поста в WordPress с SEO (Yoast)"""
     status = 'publish' if publish else 'draft'
     
     # Форматируем контент с видео
@@ -214,11 +214,24 @@ def create_wp_post(title, content, post_type, media_id=None, video_url=None, pub
         final_content = format_content_for_wp(content, video_url)
         logger.info(f"🎬 Видео URL {video_url} вставлен в контент")
     
+    # Генерируем SEO данные
+    seo_title = title[:70]  # Ограничиваем 70 символами
+    seo_description = re.sub(r'<[^>]+>', '', content)  # Убираем HTML теги
+    seo_description = re.sub(r'\[video[^\]]*\]', '', seo_description)  # Убираем шорткод видео
+    seo_description = ' '.join(seo_description.split())  # Убираем лишние пробелы
+    seo_description = seo_description[:160]  # Ограничиваем 160 символами
+    if len(content) > 160:
+        seo_description = seo_description[:157] + "..."
+    
     post_data = {
         'title': title,
         'content': final_content,
         'status': status,
         'type': post_type,
+        'meta': {
+            '_yoast_wpseo_title': seo_title,
+            '_yoast_wpseo_metadesc': seo_description
+        }
     }
     
     # Если есть медиа ID, устанавливаем как обложку
@@ -229,6 +242,8 @@ def create_wp_post(title, content, post_type, media_id=None, video_url=None, pub
     
     try:
         logger.info(f"📤 Отправка в WordPress: раздел={post_type}, статус={status}")
+        logger.info(f"🔍 SEO Заголовок: {seo_title}")
+        logger.info(f"🔍 SEO Описание: {seo_description[:50]}...")
         
         response = wp_session.post(
             f"{WP_API_URL}/{post_type}",
@@ -242,11 +257,7 @@ def create_wp_post(title, content, post_type, media_id=None, video_url=None, pub
         if response.status_code == 201:
             post_link = response.json()['link']
             logger.info(f"✅ Пост создан: {post_link}")
-            if is_video:
-                if media_id:
-                    logger.info(f"🎬 Видео вставлено в контент, ID={media_id} как обложка")
-                else:
-                    logger.info(f"🎬 Видео вставлено в контент (шорткод)")
+            logger.info(f"✅ SEO данные добавлены (Yoast)")
             return True, post_link
         else:
             logger.error(f"❌ Ошибка: {response.status_code}")
@@ -507,6 +518,7 @@ if __name__ == '__main__':
     logger.info(f"🤖 DeepSeek: {'✅' if DEEPSEEK_API_KEY else '❌'}")
     logger.info(f"📂 Доступные разделы: {', '.join(POST_TYPES.values())}")
     logger.info(f"🎬 Поддержка видео: ✅ (шорткод + обложка)")
+    logger.info(f"🔍 SEO (Yoast): ✅ (автоматическое заполнение)")
     
     requests.post(f"{TG_API_URL}/deleteWebhook")
     requests.post(f"{TG_API_URL}/setWebhook", json={'url': webhook_url})
