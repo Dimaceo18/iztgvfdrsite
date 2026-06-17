@@ -81,27 +81,32 @@ def extract_title_and_content(text):
     content = '\n'.join(lines[1:]).strip() if len(lines) > 1 else ""
     return title, content
 
-def format_content_for_wp(text, video_shortcode=None):
-    """Форматирование контента для WordPress с шорткодом видео"""
+def format_content_for_wp(text, media_shortcode=None):
+    """Форматирование контента - чистое форматирование без лишних абзацев"""
     if not text:
         return ""
     
-    # Разбиваем на абзацы
-    paragraphs = text.split('\n')
+    # Разбиваем на абзацы по пустым строкам
+    paragraphs = re.split(r'\n\s*\n', text.strip())
     formatted = []
     
     for para in paragraphs:
         para = para.strip()
         if para:
+            # Заменяем переносы строк внутри абзаца на пробелы
+            para = re.sub(r'\n', ' ', para)
+            # Конвертируем ссылки
             para = re.sub(r'(https?://[^\s]+)', r'<a href="\1">\1</a>', para)
+            # Конвертируем **жирный**
             para = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', para)
+            # Конвертируем *курсив*
             para = re.sub(r'\*(.+?)\*', r'<em>\1</em>', para)
             formatted.append(f'<p>{para}</p>')
     
-    # Вставляем видео после первого абзаца
-    if video_shortcode and len(formatted) > 0:
-        formatted.insert(1, video_shortcode)
-        logger.info(f"🎬 Шорткод видео вставлен в контент")
+    # Вставляем медиа после первого абзаца
+    if media_shortcode and len(formatted) > 0:
+        formatted.insert(1, media_shortcode)
+        logger.info(f"🎬 Медиа шорткод вставлен в контент")
     
     return '\n'.join(formatted)
 
@@ -168,7 +173,7 @@ def download_and_upload_media(file_id, is_video=False):
         
         logger.info(f"✅ {media_type.capitalize()} скачано, размер: {len(media_response.content)} байт")
         
-        # Загружаем в WordPress
+        # Загружаем в WordPress через multipart/form-data
         ext = 'mp4' if is_video else 'jpg'
         mime = 'video/mp4' if is_video else 'image/jpeg'
         files = {
@@ -201,14 +206,19 @@ def create_wp_post(title, content, post_type, media_id=None, video_url=None, pub
     """Создание поста в WordPress с медиа"""
     status = 'publish' if publish else 'draft'
     
-    # Создаём шорткод для видео (если есть ID и это видео)
-    video_shortcode = None
+    # Создаём шорткод для медиа
+    media_shortcode = None
     if is_video and media_id:
-        video_shortcode = f'[video id="{media_id}" width="100%" height="auto"]'
-        logger.info(f"🎬 Шорткод видео создан")
+        # Для видео используем шорткод
+        media_shortcode = f'[video id="{media_id}" width="100%" height="auto"]'
+        logger.info(f"🎬 Шорткод видео создан: {media_shortcode}")
+    elif not is_video and media_id:
+        # Для фото используем шорткод галереи
+        media_shortcode = f'[gallery ids="{media_id}"]'
+        logger.info(f"🖼️ Шорткод фото создан: {media_shortcode}")
     
     # Форматируем контент
-    final_content = format_content_for_wp(content, video_shortcode)
+    final_content = format_content_for_wp(content, media_shortcode)
     
     post_data = {
         'title': title,
@@ -217,7 +227,7 @@ def create_wp_post(title, content, post_type, media_id=None, video_url=None, pub
         'type': post_type,
     }
     
-    # Устанавливаем медиа как обложку (для фото и видео)
+    # Устанавливаем медиа как обложку
     if media_id:
         post_data['featured_media'] = media_id
         logger.info(f"📎 Устанавливаю ID={media_id} как обложку")
@@ -282,7 +292,7 @@ def process_update(update_json):
                     media_type = "видео" if post_data.get('is_video') else "фото" if post_data.get('media_file_id') else "нет"
                     new_text = f"✅ Выбран раздел: {section_name}\n\n"
                     new_text += f"Заголовок: {post_data.get('title', 'Без заголовка')}\n\n"
-                    new_text += f"Текст: {post_data.get('content', '')[:300]}...\n\n"
+                    new_text += f"Текст: {post_data.get('content', '')[:200]}...\n\n"
                     new_text += f"{media_type.capitalize()}: {'есть' if post_data.get('media_file_id') else 'нет'}\n\n"
                     new_text += "Выбери действие:"
                     
@@ -460,7 +470,7 @@ def process_update(update_json):
                 chat_id,
                 f"📢 Пост получен!\n\n"
                 f"Заголовок: {title}\n\n"
-                f"Текст: {content[:300]}...\n\n"
+                f"Текст: {content[:200]}...\n\n"
                 f"{media_type.capitalize()}: {'есть' if media_file_id else 'нет'}\n\n"
                 f"📂 Выбери раздел для публикации:",
                 json.dumps(keyboard)
@@ -499,7 +509,7 @@ if __name__ == '__main__':
     logger.info(f"👤 Админ ID: {ADMIN_ID}")
     logger.info(f"🤖 DeepSeek: {'✅' if DEEPSEEK_API_KEY else '❌'}")
     logger.info(f"📂 Доступные разделы: {', '.join(POST_TYPES.values())}")
-    logger.info(f"🎬 Поддержка видео: ✅ (шорткод + обложка)")
+    logger.info(f"🎬 Поддержка медиа: ✅ (фото - gallery, видео - shortcode)")
     
     requests.post(f"{TG_API_URL}/deleteWebhook")
     requests.post(f"{TG_API_URL}/setWebhook", json={'url': webhook_url})
