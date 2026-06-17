@@ -211,10 +211,10 @@ def create_wp_post(title, content, post_type, media_id=None, video_url=None, pub
     video_html = None
     
     if is_video and video_url:
-        # Простой HTML5 видео тег (работал в рабочей версии)
+        # Используем правильный URL видео из WordPress
         video_html = f'<video controls width="100%"><source src="{video_url}" type="video/mp4"></video>'
         final_content = format_content_for_wp(content, video_html)
-        logger.info(f"🎬 Видео вставлено в контент")
+        logger.info(f"🎬 Видео вставлено в контент: {video_url}")
     
     post_data = {
         'title': title,
@@ -223,7 +223,7 @@ def create_wp_post(title, content, post_type, media_id=None, video_url=None, pub
         'type': post_type,
     }
     
-    # Если есть медиа ID, устанавливаем как обложку (НО ЭТО НЕ РАБОТАЛО)
+    # Если есть медиа ID, устанавливаем как обложку
     if media_id:
         post_data['featured_media'] = media_id
         logger.info(f"📎 Устанавливаю ID={media_id} как обложку")
