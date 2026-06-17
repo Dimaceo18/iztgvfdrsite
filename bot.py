@@ -81,7 +81,7 @@ def extract_title_and_content(text):
     content = '\n'.join(lines[1:]).strip() if len(lines) > 1 else ""
     return title, content
 
-def format_content_for_wp(text, media_shortcode=None):
+def format_content_for_wp(text, video_html=None):
     """Форматирование контента - чистое форматирование без лишних абзацев"""
     if not text:
         return ""
@@ -103,10 +103,10 @@ def format_content_for_wp(text, media_shortcode=None):
             para = re.sub(r'\*(.+?)\*', r'<em>\1</em>', para)
             formatted.append(f'<p>{para}</p>')
     
-    # Вставляем медиа после первого абзаца
-    if media_shortcode and len(formatted) > 0:
-        formatted.insert(1, media_shortcode)
-        logger.info(f"🎬 Медиа шорткод вставлен в контент")
+    # Вставляем видео после первого абзаца, если есть
+    if video_html and len(formatted) > 0:
+        formatted.insert(1, video_html)
+        logger.info(f"🎬 Видео вставлено в контент")
     
     return '\n'.join(formatted)
 
@@ -173,11 +173,11 @@ def download_and_upload_media(file_id, is_video=False):
         
         logger.info(f"✅ {media_type.capitalize()} скачано, размер: {len(media_response.content)} байт")
         
-        # Загружаем в WordPress через multipart/form-data
+        # Загружаем через multipart/form-data
         ext = 'mp4' if is_video else 'jpg'
         mime = 'video/mp4' if is_video else 'image/jpeg'
         files = {
-            'file': (f'{media_type}_{int(time.time())}.{ext}', media_response.content, mime)
+            'file': (f'media_{int(time.time())}.{ext}', media_response.content, mime)
         }
         
         logger.info(f"📸 Загружаю {media_type} в WordPress...")
@@ -203,22 +203,18 @@ def download_and_upload_media(file_id, is_video=False):
         return None, None
 
 def create_wp_post(title, content, post_type, media_id=None, video_url=None, publish=False, is_video=False):
-    """Создание поста в WordPress с медиа"""
+    """Создание поста в WordPress с видео"""
     status = 'publish' if publish else 'draft'
     
-    # Создаём шорткод для медиа
-    media_shortcode = None
-    if is_video and media_id:
-        # Для видео используем шорткод
-        media_shortcode = f'[video id="{media_id}" width="100%" height="auto"]'
-        logger.info(f"🎬 Шорткод видео создан: {media_shortcode}")
-    elif not is_video and media_id:
-        # Для фото используем шорткод галереи
-        media_shortcode = f'[gallery ids="{media_id}"]'
-        logger.info(f"🖼️ Шорткод фото создан: {media_shortcode}")
+    # Форматируем контент с видео
+    final_content = content
+    video_html = None
     
-    # Форматируем контент
-    final_content = format_content_for_wp(content, media_shortcode)
+    if is_video and video_url:
+        # Простой HTML5 видео тег (работал в рабочей версии)
+        video_html = f'<video controls width="100%"><source src="{video_url}" type="video/mp4"></video>'
+        final_content = format_content_for_wp(content, video_html)
+        logger.info(f"🎬 Видео вставлено в контент")
     
     post_data = {
         'title': title,
@@ -227,7 +223,7 @@ def create_wp_post(title, content, post_type, media_id=None, video_url=None, pub
         'type': post_type,
     }
     
-    # Устанавливаем медиа как обложку
+    # Если есть медиа ID, устанавливаем как обложку (НО ЭТО НЕ РАБОТАЛО)
     if media_id:
         post_data['featured_media'] = media_id
         logger.info(f"📎 Устанавливаю ID={media_id} как обложку")
@@ -509,7 +505,7 @@ if __name__ == '__main__':
     logger.info(f"👤 Админ ID: {ADMIN_ID}")
     logger.info(f"🤖 DeepSeek: {'✅' if DEEPSEEK_API_KEY else '❌'}")
     logger.info(f"📂 Доступные разделы: {', '.join(POST_TYPES.values())}")
-    logger.info(f"🎬 Поддержка медиа: ✅ (фото - gallery, видео - shortcode)")
+    logger.info(f"🎬 Поддержка видео: ✅")
     
     requests.post(f"{TG_API_URL}/deleteWebhook")
     requests.post(f"{TG_API_URL}/setWebhook", json={'url': webhook_url})
