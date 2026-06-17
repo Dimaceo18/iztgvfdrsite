@@ -81,27 +81,33 @@ def extract_title_and_content(text):
     content = '\n'.join(lines[1:]).strip() if len(lines) > 1 else ""
     return title, content
 
-def format_content_for_wp(text, video_shortcode=None):
-    """Форматирование контента - вставляем видео после первого абзаца"""
+def format_content_for_wp(text, video_url=None):
+    """Форматирование контента для WordPress - чистый текст, без лишних абзацев"""
     if not text:
         return ""
     
-    # Разбиваем на абзацы
-    paragraphs = text.split('\n')
+    # Разбиваем на абзацы по пустым строкам
+    paragraphs = re.split(r'\n\s*\n', text.strip())
     formatted = []
     
     for para in paragraphs:
         para = para.strip()
         if para:
+            # Заменяем переносы строк внутри абзаца на пробелы
+            para = re.sub(r'\n', ' ', para)
+            # Конвертируем ссылки
             para = re.sub(r'(https?://[^\s]+)', r'<a href="\1">\1</a>', para)
+            # Конвертируем **жирный**
             para = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', para)
+            # Конвертируем *курсив*
             para = re.sub(r'\*(.+?)\*', r'<em>\1</em>', para)
             formatted.append(f'<p>{para}</p>')
     
-    # Вставляем шорткод видео после первого абзаца
-    if video_shortcode and len(formatted) > 0:
-        formatted.insert(1, video_shortcode)
-        logger.info(f"🎬 Видео шорткод вставлен в контент: {video_shortcode}")
+    # Вставляем видео после первого абзаца, если есть
+    if video_url and len(formatted) > 0:
+        # Вставляем видео после первого абзаца
+        video_block = f'<figure class="wp-block-video"><video controls width="100%" poster=""><source src="{video_url}" type="video/mp4"></video></figure>'
+        formatted.insert(1, video_block)
     
     return '\n'.join(formatted)
 
@@ -134,44 +140,55 @@ def process_text_with_deepseek(text):
         logger.error(f"Ошибка DeepSeek: {e}")
         return None
 
-def download_and_upload_video(file_id):
-    """Скачивание и загрузка видео в WordPress"""
+def extract_video_thumbnail(video_url):
+    """Пытаемся получить стоп-кадр из видео через API WordPress"""
+    # WordPress может автоматически сгенерировать превью для видео
+    # Возвращаем None - будем использовать видео ID как обложку
+    return None
+
+def download_and_upload_media(file_id, is_video=False):
+    """Загрузка фото или видео в WordPress"""
     try:
-        logger.info(f"🎬 НАЧАЛО ЗАГРУЗКИ ВИДЕО: file_id={file_id}")
+        media_type = "видео" if is_video else "фото"
+        logger.info(f"📸 НАЧАЛО ЗАГРУЗКИ {media_type.upper()}: file_id={file_id}")
         
-        get_file = requests.get(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile",
-            params={'file_id': file_id},
-            timeout=30
-        )
+        get_file_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile"
+        file_response = requests.get(get_file_url, params={'file_id': file_id}, timeout=30)
         
-        if get_file.status_code != 200:
-            logger.error(f"❌ Ошибка getFile: {get_file.status_code}")
+        if file_response.status_code != 200:
+            logger.error(f"❌ Ошибка getFile: {file_response.status_code}")
             return None, None
         
-        file_path = get_file.json().get('result', {}).get('file_path')
+        result = file_response.json().get('result')
+        if not result:
+            logger.error("❌ Не получен result от Telegram")
+            return None, None
+        
+        file_path = result.get('file_path')
         if not file_path:
             logger.error("❌ Не получен file_path")
             return None, None
         
         logger.info(f"✅ file_path получен: {file_path}")
         
-        # Скачиваем видео
-        video_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
-        video_response = requests.get(video_url, timeout=120)
+        media_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
+        logger.info(f"📸 Скачиваю {media_type}...")
         
-        if video_response.status_code != 200:
-            logger.error(f"❌ Ошибка скачивания: {video_response.status_code}")
+        media_response = requests.get(media_url, timeout=120)
+        if media_response.status_code != 200:
+            logger.error(f"❌ Ошибка скачивания {media_type}: {media_response.status_code}")
             return None, None
         
-        logger.info(f"✅ Видео скачано, размер: {len(video_response.content)} байт")
+        logger.info(f"✅ {media_type.capitalize()} скачано, размер: {len(media_response.content)} байт")
         
-        # Загружаем в WordPress через multipart/form-data
+        # Загружаем через multipart/form-data
+        ext = 'mp4' if is_video else 'jpg'
+        mime = 'video/mp4' if is_video else 'image/jpeg'
         files = {
-            'file': (f'video_{int(time.time())}.mp4', video_response.content, 'video/mp4')
+            'file': (f'{media_type}_{int(time.time())}.{ext}', media_response.content, mime)
         }
         
-        logger.info(f"📸 Загружаю видео в WordPress...")
+        logger.info(f"📸 Загружаю {media_type} в WordPress...")
         
         wp_response = wp_session.post(
             WP_MEDIA_URL,
@@ -184,28 +201,42 @@ def download_and_upload_video(file_id):
         
         if wp_response.status_code == 201:
             media_id = wp_response.json()['id']
-            source_url = wp_response.json()['source_url']
-            logger.info(f"✅ Видео загружено! ID={media_id}, URL={source_url}")
+            source_url = wp_response.json().get('source_url', 'unknown')
+            logger.info(f"✅ {media_type.capitalize()} загружено! ID={media_id}, URL={source_url}")
+            
+            # Для видео: пытаемся получить стоп-кадр (если WordPress сгенерирует)
+            if is_video:
+                # Ждём немного, чтобы WordPress мог обработать видео
+                time.sleep(2)
+                # Получаем обновлённую информацию о медиа (может появиться превью)
+                media_info = wp_session.get(
+                    f"{WP_MEDIA_URL}/{media_id}",
+                    auth=(WP_USERNAME, WP_PASSWORD),
+                    timeout=30
+                )
+                if media_info.status_code == 200:
+                    media_data = media_info.json()
+                    if media_data.get('media_details', {}).get('sizes'):
+                        logger.info(f"✅ WordPress сгенерировал превью для видео")
+            
             return media_id, source_url
         else:
-            logger.error(f"❌ Ошибка WP: {wp_response.status_code}")
+            logger.error(f"❌ Ошибка WP при загрузке {media_type}: {wp_response.status_code}")
             return None, None
             
     except Exception as e:
-        logger.error(f"❌ Ошибка: {e}")
+        logger.error(f"❌ Ошибка загрузки медиа: {e}")
         return None, None
 
-def create_wp_post(title, content, post_type, media_id=None, publish=False):
-    """Создание поста в WordPress с видео через шорткод"""
+def create_wp_post(title, content, post_type, media_id=None, video_url=None, publish=False, is_video=False):
+    """Создание поста в WordPress"""
     status = 'publish' if publish else 'draft'
     
-    # Форматируем контент с шорткодом видео
+    # Форматируем контент
     final_content = content
-    if media_id:
-        # Используем шорткод WordPress для видео
-        video_shortcode = f'[video id="{media_id}" width="100%" height="auto"]'
-        final_content = format_content_for_wp(content, video_shortcode)
-        logger.info(f"🎬 Видео шорткод с ID={media_id} вставлен в контент")
+    if is_video and video_url:
+        final_content = format_content_for_wp(content, video_url)
+        logger.info(f"🎬 Видео вставлено в контент")
     
     post_data = {
         'title': title,
@@ -214,10 +245,11 @@ def create_wp_post(title, content, post_type, media_id=None, publish=False):
         'type': post_type,
     }
     
-    # Устанавливаем видео как обложку
+    # Если есть медиа ID, устанавливаем как обложку
     if media_id:
         post_data['featured_media'] = media_id
-        logger.info(f"📎 Устанавливаю видео ID={media_id} как обложку")
+        media_type = "видео" if is_video else "фото"
+        logger.info(f"📎 Устанавливаю {media_type} ID={media_id} как обложку")
     
     try:
         logger.info(f"📤 Отправка в WordPress: раздел={post_type}, статус={status}")
@@ -229,12 +261,17 @@ def create_wp_post(title, content, post_type, media_id=None, publish=False):
             timeout=60
         )
         
+        logger.info(f"📤 Ответ WP: {response.status_code}")
+        
         if response.status_code == 201:
             post_link = response.json()['link']
             logger.info(f"✅ Пост создан: {post_link}")
+            if is_video and media_id:
+                logger.info(f"🎬 Видео ID={media_id} установлено как обложка (стоп-кадр будет сгенерирован WordPress)")
             return True, post_link
         else:
             logger.error(f"❌ Ошибка: {response.status_code}")
+            logger.error(f"Ответ: {response.text[:200]}")
             return False, None
             
     except Exception as e:
@@ -335,19 +372,24 @@ def process_update(update_json):
                 tg_edit_message_text(chat_id, msg_id, "⏳ Публикую на сайт...")
                 
                 media_id = None
-                if post_data.get('is_video') and post_data.get('media_file_id'):
-                    media_id, _ = download_and_upload_video(post_data['media_file_id'])
+                video_url = None
+                if post_data.get('media_file_id'):
+                    media_id, video_url = download_and_upload_media(post_data['media_file_id'], post_data.get('is_video', False))
                     if media_id:
-                        logger.info(f"✅ Видео загружено! ID={media_id}")
+                        logger.info(f"✅ Медиа загружено с ID={media_id}, URL={video_url}")
                     else:
-                        logger.error("❌ Видео НЕ загрузилось!")
+                        logger.error("❌ Медиа НЕ загрузилось!")
+                else:
+                    logger.info("📸 Нет медиа для загрузки")
                 
                 success, link = create_wp_post(
                     post_data['title'],
                     post_data['content'],
                     post_data['post_type'],
                     media_id,
-                    True
+                    video_url,
+                    True,
+                    post_data.get('is_video', False)
                 )
                 
                 if success:
@@ -374,15 +416,18 @@ def process_update(update_json):
                 tg_edit_message_text(chat_id, msg_id, "⏳ Сохраняю в черновики...")
                 
                 media_id = None
-                if post_data.get('is_video') and post_data.get('media_file_id'):
-                    media_id, _ = download_and_upload_video(post_data['media_file_id'])
+                video_url = None
+                if post_data.get('media_file_id'):
+                    media_id, video_url = download_and_upload_media(post_data['media_file_id'], post_data.get('is_video', False))
                 
                 success, link = create_wp_post(
                     post_data['title'],
                     post_data['content'],
                     post_data['post_type'],
                     media_id,
-                    False
+                    video_url,
+                    False,
+                    post_data.get('is_video', False)
                 )
                 
                 if success:
@@ -482,7 +527,7 @@ if __name__ == '__main__':
     logger.info(f"👤 Админ ID: {ADMIN_ID}")
     logger.info(f"🤖 DeepSeek: {'✅' if DEEPSEEK_API_KEY else '❌'}")
     logger.info(f"📂 Доступные разделы: {', '.join(POST_TYPES.values())}")
-    logger.info(f"🎬 Поддержка видео: ✅ (шорткод)")
+    logger.info(f"🎬 Поддержка видео: ✅ (обложка = видео)")
     
     requests.post(f"{TG_API_URL}/deleteWebhook")
     requests.post(f"{TG_API_URL}/setWebhook", json={'url': webhook_url})
