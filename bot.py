@@ -81,8 +81,8 @@ def extract_title_and_content(text):
     content = '\n'.join(lines[1:]).strip() if len(lines) > 1 else ""
     return title, content
 
-def format_content_for_wp(text, video_html=None):
-    """Форматирование контента - чистое форматирование без лишних абзацев"""
+def format_content_for_wp(text, video_shortcode=None):
+    """Форматирование контента - вставляем шорткод видео после первого абзаца"""
     if not text:
         return ""
     
@@ -103,10 +103,10 @@ def format_content_for_wp(text, video_html=None):
             para = re.sub(r'\*(.+?)\*', r'<em>\1</em>', para)
             formatted.append(f'<p>{para}</p>')
     
-    # Вставляем видео после первого абзаца, если есть
-    if video_html and len(formatted) > 0:
-        formatted.insert(1, video_html)
-        logger.info(f"🎬 Видео вставлено в контент")
+    # Вставляем шорткод видео после первого абзаца
+    if video_shortcode and len(formatted) > 0:
+        formatted.insert(1, video_shortcode)
+        logger.info(f"🎬 Шорткод видео вставлен в контент: {video_shortcode}")
     
     return '\n'.join(formatted)
 
@@ -202,19 +202,19 @@ def download_and_upload_media(file_id, is_video=False):
         logger.error(f"❌ Ошибка: {e}")
         return None, None
 
-def create_wp_post(title, content, post_type, media_id=None, video_url=None, publish=False, is_video=False):
-    """Создание поста в WordPress с видео"""
+def create_wp_post(title, content, post_type, media_id=None, publish=False, is_video=False):
+    """Создание поста в WordPress с видео через шорткод"""
     status = 'publish' if publish else 'draft'
     
-    # Форматируем контент с видео
-    final_content = content
-    video_html = None
+    # Создаём шорткод для видео (без обложки)
+    video_shortcode = None
+    if is_video and media_id:
+        # Используем шорткод WordPress для видео
+        video_shortcode = f'[video id="{media_id}" width="100%" height="auto"]'
+        logger.info(f"🎬 Шорткод видео создан: {video_shortcode}")
     
-    if is_video and video_url:
-        # Используем правильный URL видео из WordPress
-        video_html = f'<video controls width="100%"><source src="{video_url}" type="video/mp4"></video>'
-        final_content = format_content_for_wp(content, video_html)
-        logger.info(f"🎬 Видео вставлено в контент: {video_url}")
+    # Форматируем контент с шорткодом
+    final_content = format_content_for_wp(content, video_shortcode)
     
     post_data = {
         'title': title,
@@ -223,10 +223,11 @@ def create_wp_post(title, content, post_type, media_id=None, video_url=None, pub
         'type': post_type,
     }
     
-    # Если есть медиа ID, устанавливаем как обложку
-    if media_id:
+    # НЕ устанавливаем обложку для видео (убираем featured_media)
+    # Если нужно фото - оно будет как обложка
+    if not is_video and media_id:
         post_data['featured_media'] = media_id
-        logger.info(f"📎 Устанавливаю ID={media_id} как обложку")
+        logger.info(f"📎 Устанавливаю фото ID={media_id} как обложку")
     
     try:
         logger.info(f"📤 Отправка в WordPress: раздел={post_type}, статус={status}")
@@ -241,6 +242,8 @@ def create_wp_post(title, content, post_type, media_id=None, video_url=None, pub
         if response.status_code == 201:
             post_link = response.json()['link']
             logger.info(f"✅ Пост создан: {post_link}")
+            if is_video and media_id:
+                logger.info(f"🎬 Видео ID={media_id} вставлено через шорткод")
             return True, post_link
         else:
             logger.error(f"❌ Ошибка: {response.status_code}")
@@ -344,9 +347,8 @@ def process_update(update_json):
                 tg_edit_message_text(chat_id, msg_id, "⏳ Публикую на сайт...")
                 
                 media_id = None
-                video_url = None
                 if post_data.get('media_file_id'):
-                    media_id, video_url = download_and_upload_media(
+                    media_id, _ = download_and_upload_media(
                         post_data['media_file_id'], 
                         post_data.get('is_video', False)
                     )
@@ -362,7 +364,6 @@ def process_update(update_json):
                     post_data['content'],
                     post_data['post_type'],
                     media_id,
-                    video_url,
                     True,
                     post_data.get('is_video', False)
                 )
@@ -391,9 +392,8 @@ def process_update(update_json):
                 tg_edit_message_text(chat_id, msg_id, "⏳ Сохраняю в черновики...")
                 
                 media_id = None
-                video_url = None
                 if post_data.get('media_file_id'):
-                    media_id, video_url = download_and_upload_media(
+                    media_id, _ = download_and_upload_media(
                         post_data['media_file_id'], 
                         post_data.get('is_video', False)
                     )
@@ -403,7 +403,6 @@ def process_update(update_json):
                     post_data['content'],
                     post_data['post_type'],
                     media_id,
-                    video_url,
                     False,
                     post_data.get('is_video', False)
                 )
@@ -505,7 +504,7 @@ if __name__ == '__main__':
     logger.info(f"👤 Админ ID: {ADMIN_ID}")
     logger.info(f"🤖 DeepSeek: {'✅' if DEEPSEEK_API_KEY else '❌'}")
     logger.info(f"📂 Доступные разделы: {', '.join(POST_TYPES.values())}")
-    logger.info(f"🎬 Поддержка видео: ✅")
+    logger.info(f"🎬 Поддержка видео: ✅ (шорткод, без обложки)")
     
     requests.post(f"{TG_API_URL}/deleteWebhook")
     requests.post(f"{TG_API_URL}/setWebhook", json={'url': webhook_url})
