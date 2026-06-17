@@ -99,7 +99,6 @@ def format_content_for_wp(text, video_url=None):
             
             # Вставляем видео после первого абзаца
             if i == 0 and video_url:
-                # Используем шорткод WordPress для видео (более надёжный)
                 formatted.append(f'[video width="100%" height="auto" mp4="{video_url}"]')
     
     return '\n'.join(formatted)
@@ -211,11 +210,11 @@ def create_wp_post(title, content, post_type, media_id=None, video_url=None, pub
         logger.info(f"🎬 Видео URL {video_url} вставлен в контент")
     
     # Генерируем SEO данные
-    seo_title = title[:70]  # Ограничиваем 70 символами
-    seo_description = re.sub(r'<[^>]+>', '', content)  # Убираем HTML теги
-    seo_description = re.sub(r'\[video[^\]]*\]', '', seo_description)  # Убираем шорткод видео
-    seo_description = ' '.join(seo_description.split())  # Убираем лишние пробелы
-    seo_description = seo_description[:160]  # Ограничиваем 160 символами
+    seo_title = title[:70]
+    seo_description = re.sub(r'<[^>]+>', '', content)
+    seo_description = re.sub(r'\[video[^\]]*\]', '', seo_description)
+    seo_description = ' '.join(seo_description.split())
+    seo_description = seo_description[:160]
     if len(seo_description) > 160:
         seo_description = seo_description[:157] + "..."
     
@@ -230,7 +229,6 @@ def create_wp_post(title, content, post_type, media_id=None, video_url=None, pub
         }
     }
     
-    # Если есть медиа ID, устанавливаем как обложку
     if media_id:
         post_data['featured_media'] = media_id
         media_type = "видео" if is_video else "фото"
@@ -253,11 +251,6 @@ def create_wp_post(title, content, post_type, media_id=None, video_url=None, pub
         if response.status_code == 201:
             post_link = response.json()['link']
             logger.info(f"✅ Пост создан: {post_link}")
-            if is_video:
-                if media_id:
-                    logger.info(f"🎬 Видео вставлено в контент, ID={media_id} как обложка")
-                else:
-                    logger.info(f"🎬 Видео вставлено в контент (шорткод)")
             logger.info(f"✅ SEO данные добавлены (Yoast)")
             return True, post_link
         else:
@@ -286,7 +279,6 @@ def process_update(update_json):
             parts = data.split('|')
             action = parts[0]
             
-            # Выбор раздела
             if action == 'select_post_type' and len(parts) >= 3:
                 post_key = parts[1]
                 post_type = parts[2]
@@ -314,7 +306,6 @@ def process_update(update_json):
                     tg_edit_message_text(chat_id, msg_id, new_text, json.dumps(keyboard))
                 return
             
-            # Обработка через ИИ
             if action == 'ai' and len(parts) >= 2:
                 post_key = parts[1]
                 post_data = pending_posts.get(post_key)
@@ -347,7 +338,6 @@ def process_update(update_json):
                         tg_edit_message_text(chat_id, msg_id, "❌ Ошибка ИИ")
                 return
             
-            # Публикация на сайт
             if action == 'publish' and len(parts) >= 2:
                 post_key = parts[1]
                 post_data = pending_posts.get(post_key)
@@ -391,7 +381,6 @@ def process_update(update_json):
                 del pending_posts[post_key]
                 return
             
-            # Черновик
             if action == 'draft' and len(parts) >= 2:
                 post_key = parts[1]
                 post_data = pending_posts.get(post_key)
