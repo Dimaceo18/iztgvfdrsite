@@ -82,29 +82,25 @@ def extract_title_and_content(text):
     return title, content
 
 def format_content_for_wp(text, video_url=None):
-    """Форматирование контента для WordPress - убираем все пустые строки"""
+    """Форматирование контента для WordPress с вставкой видео после первого абзаца"""
     if not text:
         return ""
     
-    # Убираем множественные переносы строк
-    text = re.sub(r'\n\s*\n', '\n', text)
-    
-    # Разбиваем на строки и убираем пустые
-    lines = [line.strip() for line in text.split('\n') if line.strip()]
-    
+    paragraphs = text.split('\n')
     formatted = []
-    video_inserted = False
     
-    for i, line in enumerate(lines):
-        line = re.sub(r'(https?://[^\s]+)', r'<a href="\1">\1</a>', line)
-        line = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', line)
-        line = re.sub(r'\*(.+?)\*', r'<em>\1</em>', line)
-        formatted.append(f'<p>{line}</p>')
-        
-        # Вставляем видео после первого абзаца
-        if i == 0 and video_url and not video_inserted:
-            formatted.append(f'[video width="100%" height="auto" mp4="{video_url}"]')
-            video_inserted = True
+    for i, para in enumerate(paragraphs):
+        para = para.strip()
+        if para:
+            para = re.sub(r'(https?://[^\s]+)', r'<a href="\1">\1</a>', para)
+            para = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', para)
+            para = re.sub(r'\*(.+?)\*', r'<em>\1</em>', para)
+            formatted.append(f'<p>{para}</p>')
+            
+            # Вставляем видео после первого абзаца
+            if i == 0 and video_url:
+                # Используем шорткод WordPress для видео (более надёжный)
+                formatted.append(f'[video width="100%" height="auto" mp4="{video_url}"]')
     
     return '\n'.join(formatted)
 
@@ -205,7 +201,7 @@ def download_and_upload_media(file_id, is_video=False):
         return None, None
 
 def create_wp_post(title, content, post_type, media_id=None, video_url=None, publish=False, is_video=False):
-    """Создание поста в WordPress с SEO (Yoast)"""
+    """Создание поста в WordPress с видео в контенте и SEO (Yoast)"""
     status = 'publish' if publish else 'draft'
     
     # Форматируем контент с видео
@@ -220,7 +216,7 @@ def create_wp_post(title, content, post_type, media_id=None, video_url=None, pub
     seo_description = re.sub(r'\[video[^\]]*\]', '', seo_description)  # Убираем шорткод видео
     seo_description = ' '.join(seo_description.split())  # Убираем лишние пробелы
     seo_description = seo_description[:160]  # Ограничиваем 160 символами
-    if len(content) > 160:
+    if len(seo_description) > 160:
         seo_description = seo_description[:157] + "..."
     
     post_data = {
@@ -257,6 +253,11 @@ def create_wp_post(title, content, post_type, media_id=None, video_url=None, pub
         if response.status_code == 201:
             post_link = response.json()['link']
             logger.info(f"✅ Пост создан: {post_link}")
+            if is_video:
+                if media_id:
+                    logger.info(f"🎬 Видео вставлено в контент, ID={media_id} как обложка")
+                else:
+                    logger.info(f"🎬 Видео вставлено в контент (шорткод)")
             logger.info(f"✅ SEO данные добавлены (Yoast)")
             return True, post_link
         else:
