@@ -186,7 +186,6 @@ def process_text_with_deepseek(text):
         return None
 
 def download_and_upload_photo(file_id):
-    """РАБОЧАЯ загрузка фото из Telegram в WordPress"""
     try:
         get_file_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile"
         file_response = requests.get(get_file_url, params={'file_id': file_id}, timeout=30)
@@ -206,26 +205,17 @@ def download_and_upload_photo(file_id):
             return None
         
         photo_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
-        logger.info(f"Скачивание фото: {photo_url[:50]}...")
+        logger.info(f"Скачивание фото...")
         
-        download_headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-        
-        photo_response = requests.get(photo_url, headers=download_headers, timeout=60)
-        
+        photo_response = requests.get(photo_url, timeout=60)
         if photo_response.status_code != 200:
             logger.error(f"Ошибка скачивания фото: {photo_response.status_code}")
             return None
         
-        content_type = photo_response.headers.get('content-type', 'image/jpeg')
-        
         wp_headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'application/json',
-            'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
-            'Content-Type': content_type,
-            'Content-Disposition': f'attachment; filename="telegram_photo_{int(time.time())}.jpg"'
+            'Content-Disposition': f'attachment; filename="telegram_photo_{int(time.time())}.jpg"',
+            'Content-Type': 'image/jpeg'
         }
         
         wp_response = wp_session.post(
@@ -274,21 +264,39 @@ def get_category_id(post_type, category_slug):
 def create_wp_post(title, content, post_type, category_slug=None, media_id=None, publish=False):
     status = 'publish' if publish else 'draft'
     
+    # Генерируем SEO данные
+    seo_title = title[:70]
+    seo_description = re.sub(r'<[^>]+>', '', content)
+    seo_description = ' '.join(seo_description.split())
+    seo_description = seo_description[:160]
+    if len(seo_description) > 160:
+        seo_description = seo_description[:157] + "..."
+    
     post_data = {
         'title': title,
         'content': content,
         'status': status,
         'type': post_type,
+        'meta': {
+            '_yoast_wpseo_title': seo_title,
+            '_yoast_wpseo_metadesc': seo_description
+        }
     }
     
     if media_id:
         post_data['featured_media'] = media_id
     
+    # Добавляем рубрику (исправленный способ)
     if category_slug:
         category_id = get_category_id(post_type, category_slug)
         if category_id:
             taxonomy = TAXONOMY_MAP.get(post_type, "category")
+            # Используем правильный формат для кастомных таксономий
             post_data['tax_input'] = {
+                taxonomy: [category_id]
+            }
+            # Дополнительно пробуем через terms для надёжности
+            post_data['terms'] = {
                 taxonomy: [category_id]
             }
             logger.info(f"📂 Добавлена рубрика: {category_slug} (ID: {category_id})")
@@ -303,6 +311,8 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
         }
         
         logger.info(f"📤 Отправка в WordPress: раздел={post_type}, статус={status}")
+        logger.info(f"🔍 SEO Заголовок: {seo_title}")
+        logger.info(f"🔍 SEO Описание: {seo_description[:50]}...")
         
         response = wp_session.post(
             f"{WP_API_URL}/{post_type}",
@@ -315,9 +325,11 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
         if response.status_code == 201:
             post_link = response.json()['link']
             logger.info(f"✅ Пост создан: {post_link}")
+            logger.info(f"✅ SEO данные добавлены (Yoast)")
             return True, post_link
         else:
             logger.error(f"❌ Ошибка: {response.status_code}")
+            logger.error(f"Ответ: {response.text[:300]}")
             return False, None
             
     except Exception as e:
