@@ -118,11 +118,13 @@ def tg_send_message(chat_id, text, reply_markup=None, parse_mode=None):
         data['parse_mode'] = parse_mode
     return requests.post(url, json=data, timeout=30)
 
-def tg_edit_message_text(chat_id, message_id, text, reply_markup=None):
+def tg_edit_message_text(chat_id, message_id, text, reply_markup=None, parse_mode=None):
     url = f"{TG_API_URL}/editMessageText"
     data = {'chat_id': chat_id, 'message_id': message_id, 'text': text}
     if reply_markup:
         data['reply_markup'] = reply_markup
+    if parse_mode:
+        data['parse_mode'] = parse_mode
     return requests.post(url, json=data, timeout=30)
 
 def tg_answer_callback_query(callback_id):
@@ -254,7 +256,6 @@ def download_and_upload_media(file_id, is_video=False):
         return None, None
 
 def create_wp_post(title, content, post_type, category_slug=None, media_id=None, video_url=None, publish=False, is_video=False):
-    """Создание поста с выбором раздела и рубрики"""
     status = 'publish' if publish else 'draft'
     
     final_content = content
@@ -281,10 +282,7 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
         }
     }
     
-    # Добавляем рубрику (категорию) если есть
     if category_slug:
-        # Для WordPress нужно передать ID категории, но мы используем slug
-        # Получаем ID категории по slug
         cat_response = wp_session.get(
             f"{WP_URL}/wp-json/wp/v2/categories",
             params={'slug': category_slug},
@@ -295,7 +293,7 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
             post_data['categories'] = [category_id]
             logger.info(f"📂 Добавлена рубрика: {category_slug} (ID: {category_id})")
         else:
-            logger.warning(f"⚠️ Рубрика {category_slug} не найдена, создаём без рубрики")
+            logger.warning(f"⚠️ Рубрика {category_slug} не найдена")
     
     if media_id:
         post_data['featured_media'] = media_id
@@ -356,26 +354,22 @@ def process_update(update_json):
                 if post_data:
                     post_data['post_type'] = post_type
                     
-                    # Показываем рубрики для выбранного раздела
                     categories = CATEGORIES.get(post_type, {})
                     
                     keyboard = {"inline_keyboard": []}
                     
-                    # Кнопки рубрик
                     row = []
                     for cat_slug, cat_name in categories.items():
                         row.append({"text": cat_name, "callback_data": f"select_category|{post_key}|{cat_slug}"})
-                        if len(row) == 2:  # По 2 кнопки в ряд
+                        if len(row) == 2:
                             keyboard["inline_keyboard"].append(row)
                             row = []
                     if row:
                         keyboard["inline_keyboard"].append(row)
                     
-                    # Кнопка "Без рубрики"
                     keyboard["inline_keyboard"].append([{"text": "⏩ Без рубрики", "callback_data": f"no_category|{post_key}"}])
                     
                     section_name = POST_TYPES.get(post_type, post_type)
-                    media_type = "видео" if post_data.get('is_video') else "фото"
                     new_text = f"✅ Выбран раздел: {section_name}\n\n"
                     new_text += f"📂 <b>Выбери рубрику:</b>"
                     
@@ -468,7 +462,7 @@ def process_update(update_json):
                         media_type = "видео" if post_data.get('is_video') else "фото"
                         tg_edit_message_text(
                             chat_id, msg_id,
-                            f"📌 <b>{title}</b>\n\n{content}\n\n{media_type.capitalize()}: {'✅ есть' if post_data.get('media_file_id') else 'нет'}",
+                            f"📌 <b>{title}</b>\n\n{content}\n\n{media_type.capitalize()}: {'✅ есть' if post_data.get('media_file_id') else '❌ нет'}",
                             json.dumps(keyboard), 'HTML'
                         )
                     else:
@@ -598,7 +592,6 @@ def process_update(update_json):
                 'content': formatted_content
             }
             
-            # Кнопки выбора раздела
             keyboard = {
                 "inline_keyboard": []
             }
