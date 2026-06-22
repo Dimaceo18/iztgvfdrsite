@@ -118,13 +118,12 @@ DEEPSEEK_PROMPT = """Ты редактор новостного сайта. Пе
 
 ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст."""
 
-def tg_send_message(chat_id, text, reply_markup=None, parse_mode=None):
+def tg_send_message(chat_id, text, reply_markup=None):
+    """Отправка сообщения без HTML-тегов"""
     url = f"{TG_API_URL}/sendMessage"
     data = {'chat_id': chat_id, 'text': text}
     if reply_markup:
         data['reply_markup'] = reply_markup
-    if parse_mode:
-        data['parse_mode'] = parse_mode
     response = requests.post(url, json=data, timeout=30)
     logger.info(f"📤 sendMessage ответ: {response.status_code}")
     if response.status_code != 200:
@@ -380,11 +379,9 @@ def process_update(update_json):
                     keyboard["inline_keyboard"].append([{"text": "⏩ Без рубрики", "callback_data": f"no_category|{post_key}"}])
                     
                     section_name = POST_TYPES.get(post_type, post_type)
-                    new_text = f"✅ Выбран раздел: {section_name}\n\n"
-                    new_text += f"📂 <b>Выбери рубрику:</b>"
+                    new_text = f"✅ Выбран раздел: {section_name}\n\n📂 Выбери рубрику:"
                     
-                    # Отправляем новое сообщение с выбором рубрики
-                    tg_send_message(chat_id, new_text, json.dumps(keyboard), 'HTML')
+                    tg_send_message(chat_id, new_text, json.dumps(keyboard))
                 return
             
             # ========== ВЫБОР РУБРИКИ ==========
@@ -413,13 +410,12 @@ def process_update(update_json):
                     
                     new_text = f"✅ Выбран раздел: {section_name}\n"
                     new_text += f"✅ Выбрана рубрика: {category_name}\n\n"
-                    new_text += f"📌 <b>{post_data.get('title', 'Без заголовка')}</b>\n\n"
+                    new_text += f"📌 {post_data.get('title', 'Без заголовка')}\n\n"
                     new_text += f"📝 {post_data.get('content', '')[:300]}...\n\n"
-                    new_text += f"{media_type.capitalize()}: {'✅ есть' if post_data.get('media_file_id') else '❌ нет'}\n\n"
+                    new_text += f"{media_type.capitalize()}: {'есть' if post_data.get('media_file_id') else 'нет'}\n\n"
                     new_text += "Выбери действие:"
                     
-                    # Отправляем новое сообщение с кнопками действий
-                    tg_send_message(chat_id, new_text, json.dumps(keyboard), 'HTML')
+                    tg_send_message(chat_id, new_text, json.dumps(keyboard))
                 else:
                     logger.error(f"❌ Пост с ключом {post_key} не найден!")
                 return
@@ -445,13 +441,12 @@ def process_update(update_json):
                     
                     new_text = f"✅ Выбран раздел: {section_name}\n"
                     new_text += f"⏩ Без рубрики\n\n"
-                    new_text += f"📌 <b>{post_data.get('title', 'Без заголовка')}</b>\n\n"
+                    new_text += f"📌 {post_data.get('title', 'Без заголовка')}\n\n"
                     new_text += f"📝 {post_data.get('content', '')[:300]}...\n\n"
-                    new_text += f"{media_type.capitalize()}: {'✅ есть' if post_data.get('media_file_id') else '❌ нет'}\n\n"
+                    new_text += f"{media_type.capitalize()}: {'есть' if post_data.get('media_file_id') else 'нет'}\n\n"
                     new_text += "Выбери действие:"
                     
-                    # Отправляем новое сообщение с кнопками действий
-                    tg_send_message(chat_id, new_text, json.dumps(keyboard), 'HTML')
+                    tg_send_message(chat_id, new_text, json.dumps(keyboard))
                 return
             
             # ========== ОБРАБОТКА ЧЕРЕЗ ИИ ==========
@@ -480,8 +475,8 @@ def process_update(update_json):
                         media_type = "видео" if post_data.get('is_video') else "фото"
                         tg_send_message(
                             chat_id,
-                            f"📌 <b>{title}</b>\n\n{content}\n\n{media_type.capitalize()}: {'✅ есть' if post_data.get('media_file_id') else '❌ нет'}",
-                            json.dumps(keyboard), 'HTML'
+                            f"📌 {title}\n\n{content}\n\n{media_type.capitalize()}: {'есть' if post_data.get('media_file_id') else 'нет'}",
+                            json.dumps(keyboard)
                         )
                     else:
                         tg_send_message(chat_id, "❌ Ошибка ИИ")
@@ -621,11 +616,11 @@ def process_update(update_json):
             tg_send_message(
                 chat_id,
                 f"📢 Пост получен!\n\n"
-                f"📌 <b>{title}</b>\n\n"
+                f"📌 {title}\n\n"
                 f"📝 {content[:300]}...\n\n"
-                f"{media_type.capitalize()}: {'✅ есть' if media_file_id else '❌ нет'}\n\n"
-                f"📂 <b>Выбери раздел для публикации:</b>",
-                json.dumps(keyboard), 'HTML'
+                f"{media_type.capitalize()}: {'есть' if media_file_id else 'нет'}\n\n"
+                f"📂 Выбери раздел для публикации:",
+                json.dumps(keyboard)
             )
             logger.info(f"✉️ Отправлен выбор раздела, медиа={media_type}")
             
