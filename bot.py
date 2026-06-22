@@ -96,7 +96,6 @@ CATEGORIES = {
     }
 }
 
-# Соответствие разделов и таксономий
 TAXONOMY_MAP = {
     "news": "news_category",
     "sport": "sport_category",
@@ -187,57 +186,82 @@ def process_text_with_deepseek(text):
         return None
 
 def download_and_upload_photo(file_id):
-    try:
-        get_file_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile"
-        file_response = requests.get(get_file_url, params={'file_id': file_id}, timeout=30)
-        
-        if file_response.status_code != 200:
-            logger.error(f"Ошибка getFile: {file_response.status_code}")
-            return None
-        
-        result = file_response.json().get('result')
-        if not result:
-            logger.error("Не получен result от Telegram")
-            return None
-        
-        file_path = result.get('file_path')
-        if not file_path:
-            logger.error("Не получен file_path")
-            return None
-        
-        photo_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
-        logger.info(f"Скачивание фото...")
-        
-        photo_response = requests.get(photo_url, timeout=60)
-        if photo_response.status_code != 200:
-            logger.error(f"Ошибка скачивания фото: {photo_response.status_code}")
-            return None
-        
-        wp_headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Content-Disposition': f'attachment; filename="telegram_photo_{int(time.time())}.jpg"',
-            'Content-Type': 'image/jpeg'
-        }
-        
-        wp_response = wp_session.post(
-            WP_MEDIA_URL,
-            auth=(WP_USERNAME, WP_PASSWORD),
-            headers=wp_headers,
-            data=photo_response.content,
-            timeout=60
-        )
-        
-        if wp_response.status_code == 201:
-            media_id = wp_response.json()['id']
-            logger.info(f"✅ Фото загружено, ID: {media_id}")
-            return media_id
-        else:
-            logger.error(f"Ошибка WP при загрузке фото: {wp_response.status_code}")
-            return None
+    """Загрузка фото с повторными попытками"""
+    max_attempts = 2
+    for attempt in range(max_attempts):
+        try:
+            logger.info(f"📸 Попытка {attempt + 1}/{max_attempts} загрузки фото")
             
-    except Exception as e:
-        logger.error(f"Ошибка фото: {e}")
-        return None
+            get_file_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile"
+            file_response = requests.get(get_file_url, params={'file_id': file_id}, timeout=15)
+            
+            if file_response.status_code != 200:
+                logger.error(f"Ошибка getFile: {file_response.status_code}")
+                if attempt < max_attempts - 1:
+                    time.sleep(1)
+                    continue
+                return None
+            
+            result = file_response.json().get('result')
+            if not result:
+                logger.error("Не получен result от Telegram")
+                return None
+            
+            file_path = result.get('file_path')
+            if not file_path:
+                logger.error("Не получен file_path")
+                return None
+            
+            photo_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
+            logger.info(f"Скачивание фото...")
+            
+            photo_response = requests.get(photo_url, timeout=20)
+            if photo_response.status_code != 200:
+                logger.error(f"Ошибка скачивания фото: {photo_response.status_code}")
+                if attempt < max_attempts - 1:
+                    time.sleep(1)
+                    continue
+                return None
+            
+            wp_headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Content-Disposition': f'attachment; filename="telegram_photo_{int(time.time())}.jpg"',
+                'Content-Type': 'image/jpeg'
+            }
+            
+            wp_response = wp_session.post(
+                WP_MEDIA_URL,
+                auth=(WP_USERNAME, WP_PASSWORD),
+                headers=wp_headers,
+                data=photo_response.content,
+                timeout=20
+            )
+            
+            if wp_response.status_code == 201:
+                media_id = wp_response.json()['id']
+                logger.info(f"✅ Фото загружено, ID: {media_id}")
+                return media_id
+            else:
+                logger.error(f"Ошибка WP при загрузке фото: {wp_response.status_code}")
+                if attempt < max_attempts - 1:
+                    time.sleep(2)
+                    continue
+                return None
+                
+        except requests.exceptions.Timeout:
+            logger.warning(f"⏱️ Таймаут при загрузке фото (попытка {attempt + 1})")
+            if attempt < max_attempts - 1:
+                time.sleep(2)
+                continue
+            return None
+        except Exception as e:
+            logger.warning(f"⚠️ Ошибка фото: {e}")
+            if attempt < max_attempts - 1:
+                time.sleep(1)
+                continue
+            return None
+    
+    return None
 
 def get_category_id(post_type, category_slug):
     """Получить ID категории из кэша или из API"""
@@ -247,7 +271,6 @@ def get_category_id(post_type, category_slug):
     
     taxonomy = TAXONOMY_MAP.get(post_type, "category")
     try:
-        # Пробуем найти в кастомной таксономии
         cat_response = wp_session.get(
             f"{WP_URL}/wp-json/wp/v2/{taxonomy}",
             params={'slug': category_slug},
@@ -256,21 +279,8 @@ def get_category_id(post_type, category_slug):
         if cat_response.status_code == 200 and cat_response.json():
             category_id = cat_response.json()[0]['id']
             category_cache[cache_key] = category_id
-            logger.info(f"📂 Найдена рубрика: {category_slug} (ID: {category_id}) в таксономии {taxonomy}")
+            logger.info(f"📂 Найдена рубрика: {category_slug} (ID: {category_id})")
             return category_id
-        
-        # Если не нашли, пробуем в стандартных категориях
-        cat_response2 = wp_session.get(
-            f"{WP_URL}/wp-json/wp/v2/categories",
-            params={'slug': category_slug},
-            timeout=10
-        )
-        if cat_response2.status_code == 200 and cat_response2.json():
-            category_id = cat_response2.json()[0]['id']
-            category_cache[cache_key] = category_id
-            logger.info(f"📂 Найдена рубрика: {category_slug} (ID: {category_id}) в стандартных категориях")
-            return category_id
-            
     except Exception as e:
         logger.warning(f"⚠️ Ошибка поиска рубрики {category_slug}: {e}")
     
@@ -289,25 +299,16 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
     if media_id:
         post_data['featured_media'] = media_id
     
-    # Добавляем категорию (универсальный способ)
     if category_slug:
         category_id = get_category_id(post_type, category_slug)
         if category_id:
             taxonomy = TAXONOMY_MAP.get(post_type, "category")
-            
-            # Пробуем 3 способа одновременно
             post_data['tax_input'] = {
                 taxonomy: [category_id]
             }
-            post_data['terms'] = {
-                taxonomy: [category_id]
-            }
-            if taxonomy == 'category':
-                post_data['categories'] = [category_id]
-            
-            logger.info(f"📂 Добавлена рубрика: {category_slug} (ID: {category_id}, таксономия: {taxonomy})")
+            logger.info(f"📂 Добавлена рубрика: {category_slug} (ID: {category_id})")
         else:
-            logger.warning(f"⚠️ Рубрика {category_slug} не найдена, публикую без рубрики")
+            logger.warning(f"⚠️ Рубрика {category_slug} не найдена")
     
     try:
         headers = {
@@ -317,14 +318,13 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
         }
         
         logger.info(f"📤 Отправка в WordPress: раздел={post_type}, статус={status}")
-        logger.info(f"📦 Данные для отправки: {json.dumps(post_data, ensure_ascii=False)[:500]}")
         
         response = wp_session.post(
             f"{WP_API_URL}/{post_type}",
             auth=(WP_USERNAME, WP_PASSWORD),
             json=post_data,
             headers=headers,
-            timeout=60
+            timeout=30
         )
         
         if response.status_code == 201:
@@ -333,7 +333,6 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
             return True, post_link
         else:
             logger.error(f"❌ Ошибка: {response.status_code}")
-            logger.error(f"Ответ: {response.text[:300]}")
             return False, None
             
     except Exception as e:
