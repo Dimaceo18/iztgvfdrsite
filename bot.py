@@ -127,13 +127,9 @@ def tg_send_message(chat_id, text, reply_markup=None, parse_mode=None):
         data['parse_mode'] = parse_mode
     return requests.post(url, json=data, timeout=30)
 
-def tg_edit_message_text(chat_id, message_id, text, reply_markup=None, parse_mode=None):
-    url = f"{TG_API_URL}/editMessageText"
-    data = {'chat_id': chat_id, 'message_id': message_id, 'text': text}
-    if reply_markup:
-        data['reply_markup'] = reply_markup
-    if parse_mode:
-        data['parse_mode'] = parse_mode
+def tg_delete_message(chat_id, message_id):
+    url = f"{TG_API_URL}/deleteMessage"
+    data = {'chat_id': chat_id, 'message_id': message_id}
     return requests.post(url, json=data, timeout=30)
 
 def tg_answer_callback_query(callback_id):
@@ -389,8 +385,9 @@ def process_update(update_json):
                     new_text = f"✅ Выбран раздел: {section_name}\n\n"
                     new_text += f"📂 <b>Выбери рубрику:</b>"
                     
-                    response = tg_edit_message_text(chat_id, msg_id, new_text, json.dumps(keyboard), 'HTML')
-                    logger.info(f"📤 Ответ editMessageText: {response.status_code}")
+                    # Удаляем старое сообщение и отправляем новое
+                    tg_delete_message(chat_id, msg_id)
+                    tg_send_message(chat_id, new_text, json.dumps(keyboard), 'HTML')
                 return
             
             # ========== ВЫБОР РУБРИКИ ==========
@@ -424,11 +421,11 @@ def process_update(update_json):
                     new_text += f"{media_type.capitalize()}: {'✅ есть' if post_data.get('media_file_id') else '❌ нет'}\n\n"
                     new_text += "Выбери действие:"
                     
-                    response = tg_edit_message_text(chat_id, msg_id, new_text, json.dumps(keyboard), 'HTML')
-                    logger.info(f"📤 Ответ editMessageText: {response.status_code}")
+                    # Удаляем старое сообщение и отправляем новое
+                    tg_delete_message(chat_id, msg_id)
+                    tg_send_message(chat_id, new_text, json.dumps(keyboard), 'HTML')
                 else:
                     logger.error(f"❌ Пост с ключом {post_key} не найден!")
-                    tg_edit_message_text(chat_id, msg_id, "❌ Пост не найден. Попробуйте отправить заново.")
                 return
             
             # ========== БЕЗ РУБРИКИ ==========
@@ -457,8 +454,9 @@ def process_update(update_json):
                     new_text += f"{media_type.capitalize()}: {'✅ есть' if post_data.get('media_file_id') else '❌ нет'}\n\n"
                     new_text += "Выбери действие:"
                     
-                    response = tg_edit_message_text(chat_id, msg_id, new_text, json.dumps(keyboard), 'HTML')
-                    logger.info(f"📤 Ответ editMessageText: {response.status_code}")
+                    # Удаляем старое сообщение и отправляем новое
+                    tg_delete_message(chat_id, msg_id)
+                    tg_send_message(chat_id, new_text, json.dumps(keyboard), 'HTML')
                 return
             
             # ========== ОБРАБОТКА ЧЕРЕЗ ИИ ==========
@@ -467,7 +465,7 @@ def process_update(update_json):
                 post_data = pending_posts.get(post_key)
                 
                 if post_data:
-                    tg_edit_message_text(chat_id, msg_id, "🤖 Обрабатываю текст через ИИ...")
+                    tg_send_message(chat_id, "🤖 Обрабатываю текст через ИИ...")
                     processed = process_text_with_deepseek(post_data['original_text'])
                     
                     if processed:
@@ -485,13 +483,13 @@ def process_update(update_json):
                         }
                         
                         media_type = "видео" if post_data.get('is_video') else "фото"
-                        tg_edit_message_text(
-                            chat_id, msg_id,
+                        tg_send_message(
+                            chat_id,
                             f"📌 <b>{title}</b>\n\n{content}\n\n{media_type.capitalize()}: {'✅ есть' if post_data.get('media_file_id') else '❌ нет'}",
                             json.dumps(keyboard), 'HTML'
                         )
                     else:
-                        tg_edit_message_text(chat_id, msg_id, "❌ Ошибка ИИ")
+                        tg_send_message(chat_id, "❌ Ошибка ИИ")
                 return
             
             # ========== ПУБЛИКАЦИЯ ==========
@@ -500,14 +498,14 @@ def process_update(update_json):
                 post_data = pending_posts.get(post_key)
                 
                 if not post_data:
-                    tg_edit_message_text(chat_id, msg_id, "❌ Пост не найден.")
+                    tg_send_message(chat_id, "❌ Пост не найден.")
                     return
                 
                 if not post_data.get('post_type'):
-                    tg_edit_message_text(chat_id, msg_id, "❌ Раздел не выбран.")
+                    tg_send_message(chat_id, "❌ Раздел не выбран.")
                     return
                 
-                tg_edit_message_text(chat_id, msg_id, "⏳ Публикую на сайт...")
+                tg_send_message(chat_id, "⏳ Публикую на сайт...")
                 
                 media_id = None
                 video_url = None
@@ -532,9 +530,9 @@ def process_update(update_json):
                 )
                 
                 if success:
-                    tg_edit_message_text(chat_id, msg_id, f"✅ Пост опубликован!\n\n{link}")
+                    tg_send_message(chat_id, f"✅ Пост опубликован!\n\n{link}")
                 else:
-                    tg_edit_message_text(chat_id, msg_id, "❌ Ошибка публикации")
+                    tg_send_message(chat_id, "❌ Ошибка публикации")
                 
                 del pending_posts[post_key]
                 return
@@ -545,14 +543,14 @@ def process_update(update_json):
                 post_data = pending_posts.get(post_key)
                 
                 if not post_data:
-                    tg_edit_message_text(chat_id, msg_id, "❌ Пост не найден.")
+                    tg_send_message(chat_id, "❌ Пост не найден.")
                     return
                 
                 if not post_data.get('post_type'):
-                    tg_edit_message_text(chat_id, msg_id, "❌ Раздел не выбран.")
+                    tg_send_message(chat_id, "❌ Раздел не выбран.")
                     return
                 
-                tg_edit_message_text(chat_id, msg_id, "⏳ Сохраняю в черновики...")
+                tg_send_message(chat_id, "⏳ Сохраняю в черновики...")
                 
                 media_id = None
                 video_url = None
@@ -571,9 +569,9 @@ def process_update(update_json):
                 )
                 
                 if success:
-                    tg_edit_message_text(chat_id, msg_id, f"✅ Пост сохранен в черновиках!\n\n{link}")
+                    tg_send_message(chat_id, f"✅ Пост сохранен в черновиках!\n\n{link}")
                 else:
-                    tg_edit_message_text(chat_id, msg_id, "❌ Ошибка сохранения")
+                    tg_send_message(chat_id, "❌ Ошибка сохранения")
                 
                 del pending_posts[post_key]
                 return
