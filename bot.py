@@ -38,7 +38,7 @@ POST_TYPES = {
     "sport": "⚽ Спорт"
 }
 
-# Рубрики для каждого раздела
+# Рубрики для каждого раздела (slug должны совпадать с WordPress)
 CATEGORIES = {
     "news": {
         "v-mire": "🌍 В мире",
@@ -65,10 +65,10 @@ CATEGORIES = {
         "remont": "🔨 Ремонт"
     },
     "auto": {
-        "avarii_i_dtp": "🚗 Аварии и ДТП",
+        "avarii-i-dtp": "🚗 Аварии и ДТП",
         "avtorynok": "🏪 Авторынок",
         "pdd": "📜 ПДД",
-        "test_drayvy": "🚘 Тест-драйвы и обзоры"
+        "test-drayvy": "🚘 Тест-драйвы и обзоры"
     },
     "afisha": {
         "vecherinki": "🎉 Вечеринки",
@@ -78,8 +78,8 @@ CATEGORIES = {
         "kvesty": "🔍 Квесты",
         "kino": "🎬 Кино",
         "koncerty": "🎵 Концерты",
-        "master_klassy": "🎨 Мастер-классы",
-        "obzory_afisha": "📋 Обзоры",
+        "master-klassy": "🎨 Мастер-классы",
+        "obzory": "📋 Обзоры",
         "obuchenie": "📚 Обучение",
         "rekomendacii": "💡 Рекомендации",
         "sobytiya": "📅 События",
@@ -91,7 +91,7 @@ CATEGORIES = {
     "sales": {
         "buklety": "📰 Буклеты",
         "novinki": "✨ Новинки",
-        "obzory_sales": "📋 Обзоры",
+        "obzory": "📋 Обзоры",
         "skidki": "🏷️ Скидки"
     }
 }
@@ -254,7 +254,6 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
     if category_slug:
         taxonomy = TAXONOMY_MAP.get(post_type, "category")
         
-        # Ищем категорию в правильной таксономии
         try:
             cat_response = wp_session.get(
                 f"{WP_URL}/wp-json/wp/v2/{taxonomy}",
@@ -264,7 +263,6 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
             
             if cat_response.status_code == 200 and cat_response.json():
                 category_id = cat_response.json()[0]['id']
-                # Используем tax_input для кастомных таксономий
                 post_data['tax_input'] = {
                     taxonomy: [category_id]
                 }
