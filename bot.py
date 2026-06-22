@@ -186,82 +186,67 @@ def process_text_with_deepseek(text):
         return None
 
 def download_and_upload_photo(file_id):
-    """Загрузка фото с повторными попытками"""
-    max_attempts = 2
-    for attempt in range(max_attempts):
-        try:
-            logger.info(f"📸 Попытка {attempt + 1}/{max_attempts} загрузки фото")
-            
-            get_file_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile"
-            file_response = requests.get(get_file_url, params={'file_id': file_id}, timeout=15)
-            
-            if file_response.status_code != 200:
-                logger.error(f"Ошибка getFile: {file_response.status_code}")
-                if attempt < max_attempts - 1:
-                    time.sleep(1)
-                    continue
-                return None
-            
-            result = file_response.json().get('result')
-            if not result:
-                logger.error("Не получен result от Telegram")
-                return None
-            
-            file_path = result.get('file_path')
-            if not file_path:
-                logger.error("Не получен file_path")
-                return None
-            
-            photo_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
-            logger.info(f"Скачивание фото...")
-            
-            photo_response = requests.get(photo_url, timeout=20)
-            if photo_response.status_code != 200:
-                logger.error(f"Ошибка скачивания фото: {photo_response.status_code}")
-                if attempt < max_attempts - 1:
-                    time.sleep(1)
-                    continue
-                return None
-            
-            wp_headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Content-Disposition': f'attachment; filename="telegram_photo_{int(time.time())}.jpg"',
-                'Content-Type': 'image/jpeg'
-            }
-            
-            wp_response = wp_session.post(
-                WP_MEDIA_URL,
-                auth=(WP_USERNAME, WP_PASSWORD),
-                headers=wp_headers,
-                data=photo_response.content,
-                timeout=20
-            )
-            
-            if wp_response.status_code == 201:
-                media_id = wp_response.json()['id']
-                logger.info(f"✅ Фото загружено, ID: {media_id}")
-                return media_id
-            else:
-                logger.error(f"Ошибка WP при загрузке фото: {wp_response.status_code}")
-                if attempt < max_attempts - 1:
-                    time.sleep(2)
-                    continue
-                return None
-                
-        except requests.exceptions.Timeout:
-            logger.warning(f"⏱️ Таймаут при загрузке фото (попытка {attempt + 1})")
-            if attempt < max_attempts - 1:
-                time.sleep(2)
-                continue
+    """РАБОЧАЯ загрузка фото из Telegram в WordPress"""
+    try:
+        get_file_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile"
+        file_response = requests.get(get_file_url, params={'file_id': file_id}, timeout=30)
+        
+        if file_response.status_code != 200:
+            logger.error(f"Ошибка getFile: {file_response.status_code}")
             return None
-        except Exception as e:
-            logger.warning(f"⚠️ Ошибка фото: {e}")
-            if attempt < max_attempts - 1:
-                time.sleep(1)
-                continue
+        
+        result = file_response.json().get('result')
+        if not result:
+            logger.error("Не получен result от Telegram")
             return None
-    
-    return None
+        
+        file_path = result.get('file_path')
+        if not file_path:
+            logger.error("Не получен file_path")
+            return None
+        
+        photo_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
+        logger.info(f"Скачивание фото: {photo_url[:50]}...")
+        
+        download_headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        
+        photo_response = requests.get(photo_url, headers=download_headers, timeout=60)
+        
+        if photo_response.status_code != 200:
+            logger.error(f"Ошибка скачивания фото: {photo_response.status_code}")
+            return None
+        
+        content_type = photo_response.headers.get('content-type', 'image/jpeg')
+        
+        wp_headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json',
+            'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
+            'Content-Type': content_type,
+            'Content-Disposition': f'attachment; filename="telegram_photo_{int(time.time())}.jpg"'
+        }
+        
+        wp_response = wp_session.post(
+            WP_MEDIA_URL,
+            auth=(WP_USERNAME, WP_PASSWORD),
+            headers=wp_headers,
+            data=photo_response.content,
+            timeout=60
+        )
+        
+        if wp_response.status_code == 201:
+            media_id = wp_response.json()['id']
+            logger.info(f"✅ Фото загружено, ID: {media_id}")
+            return media_id
+        else:
+            logger.error(f"Ошибка WP при загрузке фото: {wp_response.status_code}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"Ошибка фото: {e}")
+        return None
 
 def get_category_id(post_type, category_slug):
     """Получить ID категории из кэша или из API"""
@@ -324,7 +309,7 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
             auth=(WP_USERNAME, WP_PASSWORD),
             json=post_data,
             headers=headers,
-            timeout=30
+            timeout=60
         )
         
         if response.status_code == 201:
