@@ -125,12 +125,11 @@ def tg_send_message(chat_id, text, reply_markup=None, parse_mode=None):
         data['reply_markup'] = reply_markup
     if parse_mode:
         data['parse_mode'] = parse_mode
-    return requests.post(url, json=data, timeout=30)
-
-def tg_delete_message(chat_id, message_id):
-    url = f"{TG_API_URL}/deleteMessage"
-    data = {'chat_id': chat_id, 'message_id': message_id}
-    return requests.post(url, json=data, timeout=30)
+    response = requests.post(url, json=data, timeout=30)
+    logger.info(f"📤 sendMessage ответ: {response.status_code}")
+    if response.status_code != 200:
+        logger.error(f"Ошибка sendMessage: {response.text}")
+    return response
 
 def tg_answer_callback_query(callback_id):
     url = f"{TG_API_URL}/answerCallbackQuery"
@@ -348,7 +347,6 @@ def process_update(update_json):
             message = callback['message']
             callback_id = callback['id']
             chat_id = message['chat']['id']
-            msg_id = message['message_id']
             
             logger.info(f"🔘 Получен callback: {data}")
             
@@ -385,8 +383,7 @@ def process_update(update_json):
                     new_text = f"✅ Выбран раздел: {section_name}\n\n"
                     new_text += f"📂 <b>Выбери рубрику:</b>"
                     
-                    # Удаляем старое сообщение и отправляем новое
-                    tg_delete_message(chat_id, msg_id)
+                    # Отправляем новое сообщение с выбором рубрики
                     tg_send_message(chat_id, new_text, json.dumps(keyboard), 'HTML')
                 return
             
@@ -421,8 +418,7 @@ def process_update(update_json):
                     new_text += f"{media_type.capitalize()}: {'✅ есть' if post_data.get('media_file_id') else '❌ нет'}\n\n"
                     new_text += "Выбери действие:"
                     
-                    # Удаляем старое сообщение и отправляем новое
-                    tg_delete_message(chat_id, msg_id)
+                    # Отправляем новое сообщение с кнопками действий
                     tg_send_message(chat_id, new_text, json.dumps(keyboard), 'HTML')
                 else:
                     logger.error(f"❌ Пост с ключом {post_key} не найден!")
@@ -454,8 +450,7 @@ def process_update(update_json):
                     new_text += f"{media_type.capitalize()}: {'✅ есть' if post_data.get('media_file_id') else '❌ нет'}\n\n"
                     new_text += "Выбери действие:"
                     
-                    # Удаляем старое сообщение и отправляем новое
-                    tg_delete_message(chat_id, msg_id)
+                    # Отправляем новое сообщение с кнопками действий
                     tg_send_message(chat_id, new_text, json.dumps(keyboard), 'HTML')
                 return
             
