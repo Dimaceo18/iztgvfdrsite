@@ -186,7 +186,6 @@ def process_text_with_deepseek(text):
         return None
 
 def download_and_upload_photo(file_id):
-    """Упрощённая загрузка фото"""
     try:
         get_file_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile"
         file_response = requests.get(get_file_url, params={'file_id': file_id}, timeout=30)
@@ -409,6 +408,9 @@ def process_update(update_json):
                         formatted_content = format_content_for_wp(content)
                         post_data['title'] = title
                         post_data['content'] = formatted_content
+                        # СОХРАНЯЕМ МЕДИА
+                        post_data['photo_file_ids'] = post_data.get('photo_file_ids', [])
+                        post_data['video_file_id'] = post_data.get('video_file_id', None)
                         
                         keyboard = {
                             "inline_keyboard": [
@@ -418,10 +420,10 @@ def process_update(update_json):
                             ]
                         }
                         
-                        media_type = "видео" if post_data.get('is_video') else "фото"
+                        media_type = "видео" if post_data.get('video_file_id') else "фото" if post_data.get('photo_file_ids') else "нет"
                         tg_send_message(
                             chat_id,
-                            f"📌 {title}\n\n{content}\n\n{media_type.capitalize()}: {'есть' if post_data.get('media_file_id') else 'нет'}",
+                            f"📌 {title}\n\n{content}\n\n📎 Медиа: {'есть' if media_type != 'нет' else 'нет'}",
                             json.dumps(keyboard)
                         )
                     else:
@@ -442,7 +444,6 @@ def process_update(update_json):
                 
                 tg_send_message(chat_id, "⏳ Публикую на сайт...")
                 
-                # Загружаем только первое фото как обложку
                 featured_media_id = None
                 if post_data.get('photo_file_ids') and len(post_data['photo_file_ids']) > 0:
                     media_id = download_and_upload_photo(post_data['photo_file_ids'][0])
