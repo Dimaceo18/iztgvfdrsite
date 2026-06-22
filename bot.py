@@ -96,6 +96,7 @@ CATEGORIES = {
     }
 }
 
+# Соответствие разделов и таксономий
 TAXONOMY_MAP = {
     "news": "news_category",
     "sport": "sport_category",
@@ -274,12 +275,12 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
     if media_id:
         post_data['featured_media'] = media_id
     
-    # Добавляем категорию (из кэша)
+    # Добавляем категорию (используем tax_input для кастомных таксономий)
     if category_slug:
         category_id = get_category_id(post_type, category_slug)
         if category_id:
             taxonomy = TAXONOMY_MAP.get(post_type, "category")
-            post_data['terms'] = {
+            post_data['tax_input'] = {
                 taxonomy: [category_id]
             }
             logger.info(f"📂 Добавлена рубрика: {category_slug} (ID: {category_id})")
