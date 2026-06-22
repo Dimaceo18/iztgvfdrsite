@@ -345,7 +345,7 @@ def process_update(update_json):
             parts = data.split('|')
             action = parts[0]
             
-            # Выбор раздела
+            # ========== ВЫБОР РАЗДЕЛА ==========
             if action == 'select_post_type' and len(parts) >= 3:
                 post_key = parts[1]
                 post_type = parts[2]
@@ -376,7 +376,7 @@ def process_update(update_json):
                     tg_edit_message_text(chat_id, msg_id, new_text, json.dumps(keyboard), 'HTML')
                 return
             
-            # Выбор рубрики
+            # ========== ВЫБОР РУБРИКИ ==========
             if action == 'select_category' and len(parts) >= 3:
                 post_key = parts[1]
                 category_slug = parts[2]
@@ -407,7 +407,7 @@ def process_update(update_json):
                     tg_edit_message_text(chat_id, msg_id, new_text, json.dumps(keyboard), 'HTML')
                 return
             
-            # Без рубрики
+            # ========== БЕЗ РУБРИКИ ==========
             if action == 'no_category' and len(parts) >= 2:
                 post_key = parts[1]
                 post_data = pending_posts.get(post_key)
@@ -436,7 +436,7 @@ def process_update(update_json):
                     tg_edit_message_text(chat_id, msg_id, new_text, json.dumps(keyboard), 'HTML')
                 return
             
-            # Обработка через ИИ
+            # ========== ОБРАБОТКА ЧЕРЕЗ ИИ ==========
             if action == 'ai' and len(parts) >= 2:
                 post_key = parts[1]
                 post_data = pending_posts.get(post_key)
@@ -469,7 +469,7 @@ def process_update(update_json):
                         tg_edit_message_text(chat_id, msg_id, "❌ Ошибка ИИ")
                 return
             
-            # Публикация на сайт
+            # ========== ПУБЛИКАЦИЯ НА САЙТ ==========
             if action == 'publish' and len(parts) >= 2:
                 post_key = parts[1]
                 post_data = pending_posts.get(post_key)
@@ -514,7 +514,7 @@ def process_update(update_json):
                 del pending_posts[post_key]
                 return
             
-            # Черновик
+            # ========== ЧЕРНОВИК ==========
             if action == 'draft' and len(parts) >= 2:
                 post_key = parts[1]
                 post_data = pending_posts.get(post_key)
@@ -553,6 +553,7 @@ def process_update(update_json):
                 del pending_posts[post_key]
                 return
         
+        # ========== НОВОЕ СООБЩЕНИЕ ==========
         elif 'message' in update_json:
             message = update_json['message']
             chat_id = message['chat']['id']
