@@ -41,9 +41,9 @@ POST_TYPES = {
 # Рубрики для каждого раздела
 CATEGORIES = {
     "news": {
-        "v_mire": "🌍 В мире",
+        "v-mire": "🌍 В мире",
         "vlasti": "🏛️ Власти",
-        "gorod": "🏙️ Город",
+        "city": "🏙️ Город",
         "dengi": "💰 Деньги",
         "zakon": "⚖️ Закон",
         "proisshestviya": "🚨 Происшествия"
@@ -96,8 +96,9 @@ CATEGORIES = {
     }
 }
 
+# Соответствие разделов и таксономий
 TAXONOMY_MAP = {
-    "news": "category",
+    "news": "news_category",
     "sport": "sport_category",
     "realt": "realt_category",
     "auto": "auto_category",
@@ -248,27 +249,31 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
     if media_id:
         post_data['featured_media'] = media_id
     
-    # Добавляем категорию с обработкой ошибки
+    # Добавляем категорию
     category_added = False
     if category_slug:
         taxonomy = TAXONOMY_MAP.get(post_type, "category")
+        
+        # Ищем категорию в правильной таксономии
         try:
             cat_response = wp_session.get(
                 f"{WP_URL}/wp-json/wp/v2/{taxonomy}",
                 params={'slug': category_slug},
                 timeout=10
             )
+            
             if cat_response.status_code == 200 and cat_response.json():
                 category_id = cat_response.json()[0]['id']
+                # Используем tax_input для кастомных таксономий
                 post_data['tax_input'] = {
                     taxonomy: [category_id]
                 }
                 category_added = True
-                logger.info(f"📂 Добавлена рубрика: {category_slug}")
+                logger.info(f"📂 Добавлена рубрика: {category_slug} (таксономия: {taxonomy}, ID: {category_id})")
             else:
-                logger.warning(f"⚠️ Рубрика {category_slug} не найдена, публикую без рубрики")
+                logger.warning(f"⚠️ Рубрика {category_slug} не найдена в таксономии {taxonomy}")
         except Exception as e:
-            logger.warning(f"⚠️ Ошибка поиска рубрики {category_slug}: {e}, публикую без рубрики")
+            logger.warning(f"⚠️ Ошибка поиска рубрики {category_slug}: {e}")
     
     try:
         headers = {
