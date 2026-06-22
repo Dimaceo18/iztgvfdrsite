@@ -247,6 +247,7 @@ def get_category_id(post_type, category_slug):
     
     taxonomy = TAXONOMY_MAP.get(post_type, "category")
     try:
+        # Пробуем найти в кастомной таксономии
         cat_response = wp_session.get(
             f"{WP_URL}/wp-json/wp/v2/{taxonomy}",
             params={'slug': category_slug},
@@ -255,8 +256,21 @@ def get_category_id(post_type, category_slug):
         if cat_response.status_code == 200 and cat_response.json():
             category_id = cat_response.json()[0]['id']
             category_cache[cache_key] = category_id
-            logger.info(f"📂 Найдена рубрика: {category_slug} (ID: {category_id})")
+            logger.info(f"📂 Найдена рубрика: {category_slug} (ID: {category_id}) в таксономии {taxonomy}")
             return category_id
+        
+        # Если не нашли, пробуем в стандартных категориях
+        cat_response2 = wp_session.get(
+            f"{WP_URL}/wp-json/wp/v2/categories",
+            params={'slug': category_slug},
+            timeout=10
+        )
+        if cat_response2.status_code == 200 and cat_response2.json():
+            category_id = cat_response2.json()[0]['id']
+            category_cache[cache_key] = category_id
+            logger.info(f"📂 Найдена рубрика: {category_slug} (ID: {category_id}) в стандартных категориях")
+            return category_id
+            
     except Exception as e:
         logger.warning(f"⚠️ Ошибка поиска рубрики {category_slug}: {e}")
     
@@ -275,15 +289,23 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
     if media_id:
         post_data['featured_media'] = media_id
     
-    # Добавляем категорию (используем tax_input для кастомных таксономий)
+    # Добавляем категорию (универсальный способ)
     if category_slug:
         category_id = get_category_id(post_type, category_slug)
         if category_id:
             taxonomy = TAXONOMY_MAP.get(post_type, "category")
+            
+            # Пробуем 3 способа одновременно
             post_data['tax_input'] = {
                 taxonomy: [category_id]
             }
-            logger.info(f"📂 Добавлена рубрика: {category_slug} (ID: {category_id})")
+            post_data['terms'] = {
+                taxonomy: [category_id]
+            }
+            if taxonomy == 'category':
+                post_data['categories'] = [category_id]
+            
+            logger.info(f"📂 Добавлена рубрика: {category_slug} (ID: {category_id}, таксономия: {taxonomy})")
         else:
             logger.warning(f"⚠️ Рубрика {category_slug} не найдена, публикую без рубрики")
     
@@ -295,6 +317,7 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
         }
         
         logger.info(f"📤 Отправка в WordPress: раздел={post_type}, статус={status}")
+        logger.info(f"📦 Данные для отправки: {json.dumps(post_data, ensure_ascii=False)[:500]}")
         
         response = wp_session.post(
             f"{WP_API_URL}/{post_type}",
