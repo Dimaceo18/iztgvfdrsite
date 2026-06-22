@@ -389,7 +389,8 @@ def process_update(update_json):
                     new_text = f"✅ Выбран раздел: {section_name}\n\n"
                     new_text += f"📂 <b>Выбери рубрику:</b>"
                     
-                    tg_edit_message_text(chat_id, msg_id, new_text, json.dumps(keyboard), 'HTML')
+                    response = tg_edit_message_text(chat_id, msg_id, new_text, json.dumps(keyboard), 'HTML')
+                    logger.info(f"📤 Ответ editMessageText: {response.status_code}")
                 return
             
             # ========== ВЫБОР РУБРИКИ ==========
@@ -398,12 +399,10 @@ def process_update(update_json):
                 category_slug = parts[2]
                 
                 logger.info(f"🔍 Ищем пост с ключом: {post_key}")
-                logger.info(f"📋 Всего постов в хранилище: {len(pending_posts)}")
                 
                 post_data = pending_posts.get(post_key)
                 
                 if post_data:
-                    logger.info(f"✅ Пост найден: {post_data.get('title', 'Без заголовка')}")
                     post_data['category_slug'] = category_slug
                     
                     keyboard = {
@@ -425,7 +424,8 @@ def process_update(update_json):
                     new_text += f"{media_type.capitalize()}: {'✅ есть' if post_data.get('media_file_id') else '❌ нет'}\n\n"
                     new_text += "Выбери действие:"
                     
-                    tg_edit_message_text(chat_id, msg_id, new_text, json.dumps(keyboard), 'HTML')
+                    response = tg_edit_message_text(chat_id, msg_id, new_text, json.dumps(keyboard), 'HTML')
+                    logger.info(f"📤 Ответ editMessageText: {response.status_code}")
                 else:
                     logger.error(f"❌ Пост с ключом {post_key} не найден!")
                     tg_edit_message_text(chat_id, msg_id, "❌ Пост не найден. Попробуйте отправить заново.")
@@ -434,9 +434,6 @@ def process_update(update_json):
             # ========== БЕЗ РУБРИКИ ==========
             if action == 'no_category' and len(parts) >= 2:
                 post_key = parts[1]
-                
-                logger.info(f"🔍 Ищем пост с ключом (без рубрики): {post_key}")
-                
                 post_data = pending_posts.get(post_key)
                 
                 if post_data:
@@ -460,10 +457,8 @@ def process_update(update_json):
                     new_text += f"{media_type.capitalize()}: {'✅ есть' if post_data.get('media_file_id') else '❌ нет'}\n\n"
                     new_text += "Выбери действие:"
                     
-                    tg_edit_message_text(chat_id, msg_id, new_text, json.dumps(keyboard), 'HTML')
-                else:
-                    logger.error(f"❌ Пост с ключом {post_key} не найден!")
-                    tg_edit_message_text(chat_id, msg_id, "❌ Пост не найден. Попробуйте отправить заново.")
+                    response = tg_edit_message_text(chat_id, msg_id, new_text, json.dumps(keyboard), 'HTML')
+                    logger.info(f"📤 Ответ editMessageText: {response.status_code}")
                 return
             
             # ========== ОБРАБОТКА ЧЕРЕЗ ИИ ==========
