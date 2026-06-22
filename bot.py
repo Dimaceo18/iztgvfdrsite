@@ -38,7 +38,7 @@ POST_TYPES = {
     "sport": "⚽ Спорт"
 }
 
-# Рубрики для каждого раздела
+# Рубрики для каждого раздела (ключи = slug для WordPress)
 CATEGORIES = {
     "news": {
         "v_mire": "🌍 В мире",
@@ -94,6 +94,16 @@ CATEGORIES = {
         "obzory_sales": "📋 Обзоры",
         "skidki": "🏷️ Скидки"
     }
+}
+
+# Соответствие разделов и таксономий для рубрик
+TAXONOMY_MAP = {
+    "news": "category",
+    "sport": "sport_category",
+    "realt": "realt_category",
+    "auto": "auto_category",
+    "afisha": "afisha_category",
+    "sales": "sales_category"
 }
 
 app = Flask(__name__)
@@ -282,18 +292,26 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
         }
     }
     
+    # Добавляем рубрику (категорию) если есть
     if category_slug:
+        taxonomy = TAXONOMY_MAP.get(post_type, "category")
+        
+        # Ищем рубрику в правильной таксономии
         cat_response = wp_session.get(
-            f"{WP_URL}/wp-json/wp/v2/categories",
+            f"{WP_URL}/wp-json/wp/v2/{taxonomy}",
             params={'slug': category_slug},
             timeout=30
         )
+        
         if cat_response.status_code == 200 and cat_response.json():
             category_id = cat_response.json()[0]['id']
-            post_data['categories'] = [category_id]
-            logger.info(f"📂 Добавлена рубрика: {category_slug} (ID: {category_id})")
+            # Для кастомных таксономий используем поле 'tax_input'
+            post_data['tax_input'] = {
+                taxonomy: [category_id]
+            }
+            logger.info(f"📂 Добавлена рубрика: {category_slug} (таксономия: {taxonomy}, ID: {category_id})")
         else:
-            logger.warning(f"⚠️ Рубрика {category_slug} не найдена")
+            logger.warning(f"⚠️ Рубрика {category_slug} в таксономии {taxonomy} не найдена")
     
     if media_id:
         post_data['featured_media'] = media_id
@@ -318,6 +336,8 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
             post_link = response.json()['link']
             logger.info(f"✅ Пост создан: {post_link}")
             logger.info(f"✅ SEO данные добавлены (Yoast)")
+            if category_slug:
+                logger.info(f"✅ Рубрика добавлена: {category_slug}")
             return True, post_link
         else:
             logger.error(f"❌ Ошибка: {response.status_code}")
