@@ -119,16 +119,11 @@ DEEPSEEK_PROMPT = """Ты редактор новостного сайта. Пе
 ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст."""
 
 def tg_send_message(chat_id, text, reply_markup=None):
-    """Отправка сообщения без HTML-тегов"""
     url = f"{TG_API_URL}/sendMessage"
     data = {'chat_id': chat_id, 'text': text}
     if reply_markup:
         data['reply_markup'] = reply_markup
-    response = requests.post(url, json=data, timeout=30)
-    logger.info(f"📤 sendMessage ответ: {response.status_code}")
-    if response.status_code != 200:
-        logger.error(f"Ошибка sendMessage: {response.text}")
-    return response
+    return requests.post(url, json=data, timeout=30)
 
 def tg_answer_callback_query(callback_id):
     url = f"{TG_API_URL}/answerCallbackQuery"
@@ -144,24 +139,18 @@ def extract_title_and_content(text):
     content = '\n'.join(lines[1:]).strip() if len(lines) > 1 else ""
     return title, content
 
-def format_content_for_wp(text, video_url=None):
+def format_content_for_wp(text):
     if not text:
         return ""
-    
     paragraphs = text.split('\n')
     formatted = []
-    
-    for i, para in enumerate(paragraphs):
+    for para in paragraphs:
         para = para.strip()
         if para:
             para = re.sub(r'(https?://[^\s]+)', r'<a href="\1">\1</a>', para)
             para = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', para)
             para = re.sub(r'\*(.+?)\*', r'<em>\1</em>', para)
             formatted.append(f'<p>{para}</p>')
-            
-            if i == 0 and video_url:
-                formatted.append(f'[video width="100%" height="auto" mp4="{video_url}"]')
-    
     return '\n'.join(formatted)
 
 def process_text_with_deepseek(text):
@@ -193,145 +182,120 @@ def process_text_with_deepseek(text):
         logger.error(f"Ошибка DeepSeek: {e}")
         return None
 
-def download_and_upload_media(file_id, is_video=False):
+def download_and_upload_photo(file_id):
     try:
-        media_type = "видео" if is_video else "фото"
-        logger.info(f"📸 НАЧАЛО ЗАГРУЗКИ {media_type.upper()}: file_id={file_id}")
-        
         get_file_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile"
         file_response = requests.get(get_file_url, params={'file_id': file_id}, timeout=30)
         
         if file_response.status_code != 200:
-            logger.error(f"❌ Ошибка getFile: {file_response.status_code}")
-            return None, None
+            logger.error(f"Ошибка getFile: {file_response.status_code}")
+            return None
         
         result = file_response.json().get('result')
         if not result:
-            logger.error("❌ Не получен result от Telegram")
-            return None, None
+            logger.error("Не получен result от Telegram")
+            return None
         
         file_path = result.get('file_path')
         if not file_path:
-            logger.error("❌ Не получен file_path")
-            return None, None
+            logger.error("Не получен file_path")
+            return None
         
-        logger.info(f"✅ file_path получен: {file_path}")
+        photo_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
+        logger.info(f"Скачивание фото...")
         
-        media_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
-        logger.info(f"📸 Скачиваю {media_type}...")
+        photo_response = requests.get(photo_url, timeout=60)
+        if photo_response.status_code != 200:
+            logger.error(f"Ошибка скачивания фото: {photo_response.status_code}")
+            return None
         
-        media_response = requests.get(media_url, timeout=120)
-        if media_response.status_code != 200:
-            logger.error(f"❌ Ошибка скачивания {media_type}: {media_response.status_code}")
-            return None, None
-        
-        logger.info(f"✅ {media_type.capitalize()} скачано, размер: {len(media_response.content)} байт")
-        
-        ext = 'mp4' if is_video else 'jpg'
-        mime = 'video/mp4' if is_video else 'image/jpeg'
-        files = {
-            'file': (f'{media_type}_{int(time.time())}.{ext}', media_response.content, mime)
+        wp_headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Content-Disposition': f'attachment; filename="telegram_photo_{int(time.time())}.jpg"',
+            'Content-Type': 'image/jpeg'
         }
-        
-        logger.info(f"📸 Загружаю {media_type} в WordPress...")
         
         wp_response = wp_session.post(
             WP_MEDIA_URL,
             auth=(WP_USERNAME, WP_PASSWORD),
-            files=files,
-            timeout=120
+            headers=wp_headers,
+            data=photo_response.content,
+            timeout=60
         )
-        
-        logger.info(f"📸 Ответ WP: статус {wp_response.status_code}")
         
         if wp_response.status_code == 201:
             media_id = wp_response.json()['id']
-            source_url = wp_response.json().get('source_url', 'unknown')
-            logger.info(f"✅ {media_type.capitalize()} загружено! ID={media_id}, URL={source_url}")
-            return media_id, source_url
+            logger.info(f"✅ Фото загружено, ID: {media_id}")
+            return media_id
         else:
-            logger.error(f"❌ Ошибка WP при загрузке {media_type}: {wp_response.status_code}")
-            logger.error(f"Ответ: {wp_response.text[:200]}")
-            return None, None
+            logger.error(f"Ошибка WP при загрузке фото: {wp_response.status_code}")
+            return None
             
     except Exception as e:
-        logger.error(f"❌ Ошибка загрузки медиа: {e}")
-        return None, None
+        logger.error(f"Ошибка фото: {e}")
+        return None
 
-def create_wp_post(title, content, post_type, category_slug=None, media_id=None, video_url=None, publish=False, is_video=False):
+def create_wp_post(title, content, post_type, category_slug=None, media_id=None, publish=False):
     status = 'publish' if publish else 'draft'
-    
-    final_content = content
-    if is_video and video_url:
-        final_content = format_content_for_wp(content, video_url)
-        logger.info(f"🎬 Видео URL {video_url} вставлен в контент")
-    
-    seo_title = title[:70]
-    seo_description = re.sub(r'<[^>]+>', '', content)
-    seo_description = re.sub(r'\[video[^\]]*\]', '', seo_description)
-    seo_description = ' '.join(seo_description.split())
-    seo_description = seo_description[:160]
-    if len(seo_description) > 160:
-        seo_description = seo_description[:157] + "..."
     
     post_data = {
         'title': title,
-        'content': final_content,
+        'content': content,
         'status': status,
         'type': post_type,
-        'meta': {
-            '_yoast_wpseo_title': seo_title,
-            '_yoast_wpseo_metadesc': seo_description
-        }
     }
-    
-    if category_slug:
-        taxonomy = TAXONOMY_MAP.get(post_type, "category")
-        
-        cat_response = wp_session.get(
-            f"{WP_URL}/wp-json/wp/v2/{taxonomy}",
-            params={'slug': category_slug},
-            timeout=30
-        )
-        
-        if cat_response.status_code == 200 and cat_response.json():
-            category_id = cat_response.json()[0]['id']
-            post_data['tax_input'] = {
-                taxonomy: [category_id]
-            }
-            logger.info(f"📂 Добавлена рубрика: {category_slug} (таксономия: {taxonomy}, ID: {category_id})")
-        else:
-            logger.warning(f"⚠️ Рубрика {category_slug} в таксономии {taxonomy} не найдена")
     
     if media_id:
         post_data['featured_media'] = media_id
-        media_type = "видео" if is_video else "фото"
-        logger.info(f"📎 Устанавливаю {media_type} ID={media_id} как обложку")
+    
+    # Добавляем категорию с обработкой ошибки
+    category_added = False
+    if category_slug:
+        taxonomy = TAXONOMY_MAP.get(post_type, "category")
+        try:
+            cat_response = wp_session.get(
+                f"{WP_URL}/wp-json/wp/v2/{taxonomy}",
+                params={'slug': category_slug},
+                timeout=10
+            )
+            if cat_response.status_code == 200 and cat_response.json():
+                category_id = cat_response.json()[0]['id']
+                post_data['tax_input'] = {
+                    taxonomy: [category_id]
+                }
+                category_added = True
+                logger.info(f"📂 Добавлена рубрика: {category_slug}")
+            else:
+                logger.warning(f"⚠️ Рубрика {category_slug} не найдена, публикую без рубрики")
+        except Exception as e:
+            logger.warning(f"⚠️ Ошибка поиска рубрики {category_slug}: {e}, публикую без рубрики")
     
     try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+        }
+        
         logger.info(f"📤 Отправка в WordPress: раздел={post_type}, статус={status}")
-        logger.info(f"🔍 SEO Заголовок: {seo_title}")
-        logger.info(f"🔍 SEO Описание: {seo_description[:50]}...")
         
         response = wp_session.post(
             f"{WP_API_URL}/{post_type}",
             auth=(WP_USERNAME, WP_PASSWORD),
             json=post_data,
+            headers=headers,
             timeout=60
         )
-        
-        logger.info(f"📤 Ответ WP: {response.status_code}")
         
         if response.status_code == 201:
             post_link = response.json()['link']
             logger.info(f"✅ Пост создан: {post_link}")
-            logger.info(f"✅ SEO данные добавлены (Yoast)")
-            if category_slug:
+            if category_added:
                 logger.info(f"✅ Рубрика добавлена: {category_slug}")
             return True, post_link
         else:
             logger.error(f"❌ Ошибка: {response.status_code}")
-            logger.error(f"Ответ: {response.text[:200]}")
+            logger.error(f"Ответ: {response.text[:300]}")
             return False, None
             
     except Exception as e:
@@ -354,7 +318,6 @@ def process_update(update_json):
             parts = data.split('|')
             action = parts[0]
             
-            # ========== ВЫБОР РАЗДЕЛА ==========
             if action == 'select_post_type' and len(parts) >= 3:
                 post_key = parts[1]
                 post_type = parts[2]
@@ -364,7 +327,6 @@ def process_update(update_json):
                     post_data['post_type'] = post_type
                     
                     categories = CATEGORIES.get(post_type, {})
-                    
                     keyboard = {"inline_keyboard": []}
                     
                     row = []
@@ -384,13 +346,9 @@ def process_update(update_json):
                     tg_send_message(chat_id, new_text, json.dumps(keyboard))
                 return
             
-            # ========== ВЫБОР РУБРИКИ ==========
             if action == 'select_category' and len(parts) >= 3:
                 post_key = parts[1]
                 category_slug = parts[2]
-                
-                logger.info(f"🔍 Ищем пост с ключом: {post_key}")
-                
                 post_data = pending_posts.get(post_key)
                 
                 if post_data:
@@ -416,11 +374,8 @@ def process_update(update_json):
                     new_text += "Выбери действие:"
                     
                     tg_send_message(chat_id, new_text, json.dumps(keyboard))
-                else:
-                    logger.error(f"❌ Пост с ключом {post_key} не найден!")
                 return
             
-            # ========== БЕЗ РУБРИКИ ==========
             if action == 'no_category' and len(parts) >= 2:
                 post_key = parts[1]
                 post_data = pending_posts.get(post_key)
@@ -449,7 +404,6 @@ def process_update(update_json):
                     tg_send_message(chat_id, new_text, json.dumps(keyboard))
                 return
             
-            # ========== ОБРАБОТКА ЧЕРЕЗ ИИ ==========
             if action == 'ai' and len(parts) >= 2:
                 post_key = parts[1]
                 post_data = pending_posts.get(post_key)
@@ -460,7 +414,7 @@ def process_update(update_json):
                     
                     if processed:
                         title, content = extract_title_and_content(processed)
-                        formatted_content = format_content_for_wp(content, None)
+                        formatted_content = format_content_for_wp(content)
                         post_data['title'] = title
                         post_data['content'] = formatted_content
                         
@@ -482,7 +436,6 @@ def process_update(update_json):
                         tg_send_message(chat_id, "❌ Ошибка ИИ")
                 return
             
-            # ========== ПУБЛИКАЦИЯ ==========
             if action == 'publish' and len(parts) >= 2:
                 post_key = parts[1]
                 post_data = pending_posts.get(post_key)
@@ -498,15 +451,12 @@ def process_update(update_json):
                 tg_send_message(chat_id, "⏳ Публикую на сайт...")
                 
                 media_id = None
-                video_url = None
                 if post_data.get('media_file_id'):
-                    media_id, video_url = download_and_upload_media(post_data['media_file_id'], post_data.get('is_video', False))
+                    media_id = download_and_upload_photo(post_data['media_file_id'])
                     if media_id:
-                        logger.info(f"✅ Медиа загружено с ID={media_id}")
+                        logger.info(f"✅ Фото загружено ID={media_id}")
                     else:
-                        logger.error("❌ Медиа НЕ загрузилось!")
-                else:
-                    logger.info("📸 Нет медиа для загрузки")
+                        logger.warning("⚠️ Фото не загрузилось, публикую без фото")
                 
                 success, link = create_wp_post(
                     post_data['title'],
@@ -514,9 +464,7 @@ def process_update(update_json):
                     post_data['post_type'],
                     post_data.get('category_slug'),
                     media_id,
-                    video_url,
-                    True,
-                    post_data.get('is_video', False)
+                    True
                 )
                 
                 if success:
@@ -527,7 +475,6 @@ def process_update(update_json):
                 del pending_posts[post_key]
                 return
             
-            # ========== ЧЕРНОВИК ==========
             if action == 'draft' and len(parts) >= 2:
                 post_key = parts[1]
                 post_data = pending_posts.get(post_key)
@@ -543,9 +490,8 @@ def process_update(update_json):
                 tg_send_message(chat_id, "⏳ Сохраняю в черновики...")
                 
                 media_id = None
-                video_url = None
                 if post_data.get('media_file_id'):
-                    media_id, video_url = download_and_upload_media(post_data['media_file_id'], post_data.get('is_video', False))
+                    media_id = download_and_upload_photo(post_data['media_file_id'])
                 
                 success, link = create_wp_post(
                     post_data['title'],
@@ -553,9 +499,7 @@ def process_update(update_json):
                     post_data['post_type'],
                     post_data.get('category_slug'),
                     media_id,
-                    video_url,
-                    False,
-                    post_data.get('is_video', False)
+                    False
                 )
                 
                 if success:
@@ -566,7 +510,6 @@ def process_update(update_json):
                 del pending_posts[post_key]
                 return
         
-        # ========== НОВОЕ СООБЩЕНИЕ ==========
         elif 'message' in update_json:
             message = update_json['message']
             chat_id = message['chat']['id']
@@ -595,7 +538,7 @@ def process_update(update_json):
                 return
             
             title, content = extract_title_and_content(text)
-            formatted_content = format_content_for_wp(content, None)
+            formatted_content = format_content_for_wp(content)
             
             post_key = str(int(time.time() * 1000))
             pending_posts[post_key] = {
