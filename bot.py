@@ -38,7 +38,7 @@ POST_TYPES = {
     "sport": "⚽ Спорт"
 }
 
-# Рубрики для каждого раздела (ключи = slug для WordPress)
+# Рубрики для каждого раздела
 CATEGORIES = {
     "news": {
         "v_mire": "🌍 В мире",
@@ -96,7 +96,6 @@ CATEGORIES = {
     }
 }
 
-# Соответствие разделов и таксономий для рубрик
 TAXONOMY_MAP = {
     "news": "category",
     "sport": "sport_category",
@@ -292,11 +291,9 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
         }
     }
     
-    # Добавляем рубрику (категорию) если есть
     if category_slug:
         taxonomy = TAXONOMY_MAP.get(post_type, "category")
         
-        # Ищем рубрику в правильной таксономии
         cat_response = wp_session.get(
             f"{WP_URL}/wp-json/wp/v2/{taxonomy}",
             params={'slug': category_slug},
@@ -305,7 +302,6 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
         
         if cat_response.status_code == 200 and cat_response.json():
             category_id = cat_response.json()[0]['id']
-            # Для кастомных таксономий используем поле 'tax_input'
             post_data['tax_input'] = {
                 taxonomy: [category_id]
             }
@@ -400,9 +396,14 @@ def process_update(update_json):
             if action == 'select_category' and len(parts) >= 3:
                 post_key = parts[1]
                 category_slug = parts[2]
+                
+                logger.info(f"🔍 Ищем пост с ключом: {post_key}")
+                logger.info(f"📋 Всего постов в хранилище: {len(pending_posts)}")
+                
                 post_data = pending_posts.get(post_key)
                 
                 if post_data:
+                    logger.info(f"✅ Пост найден: {post_data.get('title', 'Без заголовка')}")
                     post_data['category_slug'] = category_slug
                     
                     keyboard = {
@@ -425,11 +426,17 @@ def process_update(update_json):
                     new_text += "Выбери действие:"
                     
                     tg_edit_message_text(chat_id, msg_id, new_text, json.dumps(keyboard), 'HTML')
+                else:
+                    logger.error(f"❌ Пост с ключом {post_key} не найден!")
+                    tg_edit_message_text(chat_id, msg_id, "❌ Пост не найден. Попробуйте отправить заново.")
                 return
             
             # ========== БЕЗ РУБРИКИ ==========
             if action == 'no_category' and len(parts) >= 2:
                 post_key = parts[1]
+                
+                logger.info(f"🔍 Ищем пост с ключом (без рубрики): {post_key}")
+                
                 post_data = pending_posts.get(post_key)
                 
                 if post_data:
@@ -454,6 +461,9 @@ def process_update(update_json):
                     new_text += "Выбери действие:"
                     
                     tg_edit_message_text(chat_id, msg_id, new_text, json.dumps(keyboard), 'HTML')
+                else:
+                    logger.error(f"❌ Пост с ключом {post_key} не найден!")
+                    tg_edit_message_text(chat_id, msg_id, "❌ Пост не найден. Попробуйте отправить заново.")
                 return
             
             # ========== ОБРАБОТКА ЧЕРЕЗ ИИ ==========
@@ -489,7 +499,7 @@ def process_update(update_json):
                         tg_edit_message_text(chat_id, msg_id, "❌ Ошибка ИИ")
                 return
             
-            # ========== ПУБЛИКАЦИЯ НА САЙТ ==========
+            # ========== ПУБЛИКАЦИЯ ==========
             if action == 'publish' and len(parts) >= 2:
                 post_key = parts[1]
                 post_data = pending_posts.get(post_key)
