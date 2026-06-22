@@ -38,6 +38,64 @@ POST_TYPES = {
     "sport": "⚽ Спорт"
 }
 
+# Рубрики для каждого раздела
+CATEGORIES = {
+    "news": {
+        "v_mire": "🌍 В мире",
+        "vlasti": "🏛️ Власти",
+        "gorod": "🏙️ Город",
+        "dengi": "💰 Деньги",
+        "zakon": "⚖️ Закон",
+        "proisshestviya": "🚨 Происшествия"
+    },
+    "sport": {
+        "edinoborstva": "🥊 Единоборства",
+        "zimnie_vidy": "⛷️ Зимние виды",
+        "mirovoy_sport": "🌍 Мировой спорт",
+        "sbornaya_belarusi": "🇧🇾 Сборная Беларуси",
+        "tennis": "🎾 Теннис",
+        "futbol": "⚽ Футбол",
+        "hokkey": "🏒 Хоккей"
+    },
+    "realt": {
+        "za_gorodom": "🌳 За городом",
+        "kredity": "🏦 Кредиты",
+        "novostroyki": "🏗️ Новостройки",
+        "obzory": "📋 Обзоры",
+        "remont": "🔨 Ремонт"
+    },
+    "auto": {
+        "avarii_i_dtp": "🚗 Аварии и ДТП",
+        "avtorynok": "🏪 Авторынок",
+        "pdd": "📜 ПДД",
+        "test_drayvy": "🚘 Тест-драйвы и обзоры"
+    },
+    "afisha": {
+        "vecherinki": "🎉 Вечеринки",
+        "vystavki": "🖼️ Выставки",
+        "vyhodnye": "📅 Выходные",
+        "detskaya_afisha": "🧒 Детская афиша",
+        "kvesty": "🔍 Квесты",
+        "kino": "🎬 Кино",
+        "koncerty": "🎵 Концерты",
+        "master_klassy": "🎨 Мастер-классы",
+        "obzory_afisha": "📋 Обзоры",
+        "obuchenie": "📚 Обучение",
+        "rekomendacii": "💡 Рекомендации",
+        "sobytiya": "📅 События",
+        "spektakli": "🎭 Спектакли",
+        "standap": "🎤 Стендап",
+        "festivali": "🎪 Фестивали",
+        "ekskursii": "🏛️ Экскурсии"
+    },
+    "sales": {
+        "buklety": "📰 Буклеты",
+        "novinki": "✨ Новинки",
+        "obzory_sales": "📋 Обзоры",
+        "skidki": "🏷️ Скидки"
+    }
+}
+
 app = Flask(__name__)
 wp_session = requests.Session()
 
@@ -82,7 +140,6 @@ def extract_title_and_content(text):
     return title, content
 
 def format_content_for_wp(text, video_url=None):
-    """Форматирование контента для WordPress с вставкой видео после первого абзаца"""
     if not text:
         return ""
     
@@ -97,7 +154,6 @@ def format_content_for_wp(text, video_url=None):
             para = re.sub(r'\*(.+?)\*', r'<em>\1</em>', para)
             formatted.append(f'<p>{para}</p>')
             
-            # Вставляем видео после первого абзаца
             if i == 0 and video_url:
                 formatted.append(f'[video width="100%" height="auto" mp4="{video_url}"]')
     
@@ -133,7 +189,6 @@ def process_text_with_deepseek(text):
         return None
 
 def download_and_upload_media(file_id, is_video=False):
-    """Загрузка фото или видео в WordPress"""
     try:
         media_type = "видео" if is_video else "фото"
         logger.info(f"📸 НАЧАЛО ЗАГРУЗКИ {media_type.upper()}: file_id={file_id}")
@@ -167,7 +222,6 @@ def download_and_upload_media(file_id, is_video=False):
         
         logger.info(f"✅ {media_type.capitalize()} скачано, размер: {len(media_response.content)} байт")
         
-        # Загружаем через multipart/form-data
         ext = 'mp4' if is_video else 'jpg'
         mime = 'video/mp4' if is_video else 'image/jpeg'
         files = {
@@ -199,17 +253,15 @@ def download_and_upload_media(file_id, is_video=False):
         logger.error(f"❌ Ошибка загрузки медиа: {e}")
         return None, None
 
-def create_wp_post(title, content, post_type, media_id=None, video_url=None, publish=False, is_video=False):
-    """Создание поста в WordPress с видео в контенте и SEO (Yoast)"""
+def create_wp_post(title, content, post_type, category_slug=None, media_id=None, video_url=None, publish=False, is_video=False):
+    """Создание поста с выбором раздела и рубрики"""
     status = 'publish' if publish else 'draft'
     
-    # Форматируем контент с видео
     final_content = content
     if is_video and video_url:
         final_content = format_content_for_wp(content, video_url)
         logger.info(f"🎬 Видео URL {video_url} вставлен в контент")
     
-    # Генерируем SEO данные
     seo_title = title[:70]
     seo_description = re.sub(r'<[^>]+>', '', content)
     seo_description = re.sub(r'\[video[^\]]*\]', '', seo_description)
@@ -228,6 +280,22 @@ def create_wp_post(title, content, post_type, media_id=None, video_url=None, pub
             '_yoast_wpseo_metadesc': seo_description
         }
     }
+    
+    # Добавляем рубрику (категорию) если есть
+    if category_slug:
+        # Для WordPress нужно передать ID категории, но мы используем slug
+        # Получаем ID категории по slug
+        cat_response = wp_session.get(
+            f"{WP_URL}/wp-json/wp/v2/categories",
+            params={'slug': category_slug},
+            timeout=30
+        )
+        if cat_response.status_code == 200 and cat_response.json():
+            category_id = cat_response.json()[0]['id']
+            post_data['categories'] = [category_id]
+            logger.info(f"📂 Добавлена рубрика: {category_slug} (ID: {category_id})")
+        else:
+            logger.warning(f"⚠️ Рубрика {category_slug} не найдена, создаём без рубрики")
     
     if media_id:
         post_data['featured_media'] = media_id
@@ -279,6 +347,7 @@ def process_update(update_json):
             parts = data.split('|')
             action = parts[0]
             
+            # Выбор раздела
             if action == 'select_post_type' and len(parts) >= 3:
                 post_key = parts[1]
                 post_type = parts[2]
@@ -286,6 +355,41 @@ def process_update(update_json):
                 
                 if post_data:
                     post_data['post_type'] = post_type
+                    
+                    # Показываем рубрики для выбранного раздела
+                    categories = CATEGORIES.get(post_type, {})
+                    
+                    keyboard = {"inline_keyboard": []}
+                    
+                    # Кнопки рубрик
+                    row = []
+                    for cat_slug, cat_name in categories.items():
+                        row.append({"text": cat_name, "callback_data": f"select_category|{post_key}|{cat_slug}"})
+                        if len(row) == 2:  # По 2 кнопки в ряд
+                            keyboard["inline_keyboard"].append(row)
+                            row = []
+                    if row:
+                        keyboard["inline_keyboard"].append(row)
+                    
+                    # Кнопка "Без рубрики"
+                    keyboard["inline_keyboard"].append([{"text": "⏩ Без рубрики", "callback_data": f"no_category|{post_key}"}])
+                    
+                    section_name = POST_TYPES.get(post_type, post_type)
+                    media_type = "видео" if post_data.get('is_video') else "фото"
+                    new_text = f"✅ Выбран раздел: {section_name}\n\n"
+                    new_text += f"📂 <b>Выбери рубрику:</b>"
+                    
+                    tg_edit_message_text(chat_id, msg_id, new_text, json.dumps(keyboard), 'HTML')
+                return
+            
+            # Выбор рубрики
+            if action == 'select_category' and len(parts) >= 3:
+                post_key = parts[1]
+                category_slug = parts[2]
+                post_data = pending_posts.get(post_key)
+                
+                if post_data:
+                    post_data['category_slug'] = category_slug
                     
                     keyboard = {
                         "inline_keyboard": [
@@ -295,17 +399,50 @@ def process_update(update_json):
                         ]
                     }
                     
-                    section_name = POST_TYPES.get(post_type, post_type)
+                    section_name = POST_TYPES.get(post_data['post_type'], post_data['post_type'])
+                    category_name = CATEGORIES.get(post_data['post_type'], {}).get(category_slug, category_slug)
                     media_type = "видео" if post_data.get('is_video') else "фото"
-                    new_text = f"✅ Выбран раздел: {section_name}\n\n"
-                    new_text += f"Заголовок: {post_data.get('title', 'Без заголовка')}\n\n"
-                    new_text += f"Текст: {post_data.get('content', '')[:300]}...\n\n"
-                    new_text += f"{media_type.capitalize()}: {'есть' if post_data.get('media_file_id') else 'нет'}\n\n"
+                    
+                    new_text = f"✅ Выбран раздел: {section_name}\n"
+                    new_text += f"✅ Выбрана рубрика: {category_name}\n\n"
+                    new_text += f"📌 <b>{post_data.get('title', 'Без заголовка')}</b>\n\n"
+                    new_text += f"📝 {post_data.get('content', '')[:300]}...\n\n"
+                    new_text += f"{media_type.capitalize()}: {'✅ есть' if post_data.get('media_file_id') else '❌ нет'}\n\n"
                     new_text += "Выбери действие:"
                     
-                    tg_edit_message_text(chat_id, msg_id, new_text, json.dumps(keyboard))
+                    tg_edit_message_text(chat_id, msg_id, new_text, json.dumps(keyboard), 'HTML')
                 return
             
+            # Без рубрики
+            if action == 'no_category' and len(parts) >= 2:
+                post_key = parts[1]
+                post_data = pending_posts.get(post_key)
+                
+                if post_data:
+                    post_data['category_slug'] = None
+                    
+                    keyboard = {
+                        "inline_keyboard": [
+                            [{"text": "🤖 Переделать текст через ИИ", "callback_data": f"ai|{post_key}"}],
+                            [{"text": "📝 Опубликовать в черновики", "callback_data": f"draft|{post_key}"}],
+                            [{"text": "🌐 Опубликовать на сайт", "callback_data": f"publish|{post_key}"}]
+                        ]
+                    }
+                    
+                    section_name = POST_TYPES.get(post_data['post_type'], post_data['post_type'])
+                    media_type = "видео" if post_data.get('is_video') else "фото"
+                    
+                    new_text = f"✅ Выбран раздел: {section_name}\n"
+                    new_text += f"⏩ Без рубрики\n\n"
+                    new_text += f"📌 <b>{post_data.get('title', 'Без заголовка')}</b>\n\n"
+                    new_text += f"📝 {post_data.get('content', '')[:300]}...\n\n"
+                    new_text += f"{media_type.capitalize()}: {'✅ есть' if post_data.get('media_file_id') else '❌ нет'}\n\n"
+                    new_text += "Выбери действие:"
+                    
+                    tg_edit_message_text(chat_id, msg_id, new_text, json.dumps(keyboard), 'HTML')
+                return
+            
+            # Обработка через ИИ
             if action == 'ai' and len(parts) >= 2:
                 post_key = parts[1]
                 post_data = pending_posts.get(post_key)
@@ -331,13 +468,14 @@ def process_update(update_json):
                         media_type = "видео" if post_data.get('is_video') else "фото"
                         tg_edit_message_text(
                             chat_id, msg_id,
-                            f"Заголовок: {title}\n\nТекст: {content}\n\n{media_type.capitalize()}: {'есть' if post_data.get('media_file_id') else 'нет'}",
-                            json.dumps(keyboard)
+                            f"📌 <b>{title}</b>\n\n{content}\n\n{media_type.capitalize()}: {'✅ есть' if post_data.get('media_file_id') else 'нет'}",
+                            json.dumps(keyboard), 'HTML'
                         )
                     else:
                         tg_edit_message_text(chat_id, msg_id, "❌ Ошибка ИИ")
                 return
             
+            # Публикация на сайт
             if action == 'publish' and len(parts) >= 2:
                 post_key = parts[1]
                 post_data = pending_posts.get(post_key)
@@ -357,7 +495,7 @@ def process_update(update_json):
                 if post_data.get('media_file_id'):
                     media_id, video_url = download_and_upload_media(post_data['media_file_id'], post_data.get('is_video', False))
                     if media_id:
-                        logger.info(f"✅ Медиа загружено с ID={media_id}, URL={video_url}")
+                        logger.info(f"✅ Медиа загружено с ID={media_id}")
                     else:
                         logger.error("❌ Медиа НЕ загрузилось!")
                 else:
@@ -367,6 +505,7 @@ def process_update(update_json):
                     post_data['title'],
                     post_data['content'],
                     post_data['post_type'],
+                    post_data.get('category_slug'),
                     media_id,
                     video_url,
                     True,
@@ -381,6 +520,7 @@ def process_update(update_json):
                 del pending_posts[post_key]
                 return
             
+            # Черновик
             if action == 'draft' and len(parts) >= 2:
                 post_key = parts[1]
                 post_data = pending_posts.get(post_key)
@@ -404,6 +544,7 @@ def process_update(update_json):
                     post_data['title'],
                     post_data['content'],
                     post_data['post_type'],
+                    post_data.get('category_slug'),
                     media_id,
                     video_url,
                     False,
@@ -457,6 +598,7 @@ def process_update(update_json):
                 'content': formatted_content
             }
             
+            # Кнопки выбора раздела
             keyboard = {
                 "inline_keyboard": []
             }
@@ -467,16 +609,17 @@ def process_update(update_json):
             tg_send_message(
                 chat_id,
                 f"📢 Пост получен!\n\n"
-                f"Заголовок: {title}\n\n"
-                f"Текст: {content[:300]}...\n\n"
-                f"{media_type.capitalize()}: {'есть' if media_file_id else 'нет'}\n\n"
-                f"📂 Выбери раздел для публикации:",
-                json.dumps(keyboard)
+                f"📌 <b>{title}</b>\n\n"
+                f"📝 {content[:300]}...\n\n"
+                f"{media_type.capitalize()}: {'✅ есть' if media_file_id else '❌ нет'}\n\n"
+                f"📂 <b>Выбери раздел для публикации:</b>",
+                json.dumps(keyboard), 'HTML'
             )
             logger.info(f"✉️ Отправлен выбор раздела, медиа={media_type}")
             
     except Exception as e:
         logger.error(f"Ошибка: {e}")
+        logger.exception("Детали:")
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -507,8 +650,7 @@ if __name__ == '__main__':
     logger.info(f"👤 Админ ID: {ADMIN_ID}")
     logger.info(f"🤖 DeepSeek: {'✅' if DEEPSEEK_API_KEY else '❌'}")
     logger.info(f"📂 Доступные разделы: {', '.join(POST_TYPES.values())}")
-    logger.info(f"🎬 Поддержка видео: ✅ (шорткод + обложка)")
-    logger.info(f"🔍 SEO (Yoast): ✅ (автоматическое заполнение)")
+    logger.info(f"📋 Доступные рубрики: {sum(len(c) for c in CATEGORIES.values())}")
     
     requests.post(f"{TG_API_URL}/deleteWebhook")
     requests.post(f"{TG_API_URL}/setWebhook", json={'url': webhook_url})
