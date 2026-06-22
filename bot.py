@@ -38,7 +38,7 @@ POST_TYPES = {
     "sport": "⚽ Спорт"
 }
 
-# Рубрики для каждого раздела (slug должны совпадать с WordPress)
+# Рубрики для каждого раздела
 CATEGORIES = {
     "news": {
         "v-mire": "🌍 В мире",
@@ -96,7 +96,6 @@ CATEGORIES = {
     }
 }
 
-# Соответствие разделов и таксономий
 TAXONOMY_MAP = {
     "news": "news_category",
     "sport": "sport_category",
@@ -111,6 +110,9 @@ wp_session = requests.Session()
 
 # Хранилище
 pending_posts = {}
+
+# Кэш категорий
+category_cache = {}
 
 # Базовый URL для Telegram API
 TG_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
@@ -236,6 +238,29 @@ def download_and_upload_photo(file_id):
         logger.error(f"Ошибка фото: {e}")
         return None
 
+def get_category_id(post_type, category_slug):
+    """Получить ID категории из кэша или из API"""
+    cache_key = f"{post_type}_{category_slug}"
+    if cache_key in category_cache:
+        return category_cache[cache_key]
+    
+    taxonomy = TAXONOMY_MAP.get(post_type, "category")
+    try:
+        cat_response = wp_session.get(
+            f"{WP_URL}/wp-json/wp/v2/{taxonomy}",
+            params={'slug': category_slug},
+            timeout=10
+        )
+        if cat_response.status_code == 200 and cat_response.json():
+            category_id = cat_response.json()[0]['id']
+            category_cache[cache_key] = category_id
+            logger.info(f"📂 Найдена рубрика: {category_slug} (ID: {category_id})")
+            return category_id
+    except Exception as e:
+        logger.warning(f"⚠️ Ошибка поиска рубрики {category_slug}: {e}")
+    
+    return None
+
 def create_wp_post(title, content, post_type, category_slug=None, media_id=None, publish=False):
     status = 'publish' if publish else 'draft'
     
@@ -249,34 +274,17 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
     if media_id:
         post_data['featured_media'] = media_id
     
-    # Добавляем категорию (исправленный способ)
-    category_added = False
+    # Добавляем категорию (из кэша)
     if category_slug:
-        taxonomy = TAXONOMY_MAP.get(post_type, "category")
-        
-        try:
-            # Ищем категорию по slug
-            cat_response = wp_session.get(
-                f"{WP_URL}/wp-json/wp/v2/{taxonomy}",
-                params={'slug': category_slug},
-                timeout=10
-            )
-            
-            if cat_response.status_code == 200 and cat_response.json():
-                category_id = cat_response.json()[0]['id']
-                category_name = cat_response.json()[0]['name']
-                
-                # Используем поле terms для кастомных таксономий
-                post_data['terms'] = {
-                    taxonomy: [category_id]
-                }
-                
-                category_added = True
-                logger.info(f"📂 Добавлена рубрика: {category_name} (ID: {category_id}, таксономия: {taxonomy})")
-            else:
-                logger.warning(f"⚠️ Рубрика с slug '{category_slug}' не найдена в таксономии {taxonomy}")
-        except Exception as e:
-            logger.warning(f"⚠️ Ошибка поиска рубрики: {e}")
+        category_id = get_category_id(post_type, category_slug)
+        if category_id:
+            taxonomy = TAXONOMY_MAP.get(post_type, "category")
+            post_data['terms'] = {
+                taxonomy: [category_id]
+            }
+            logger.info(f"📂 Добавлена рубрика: {category_slug} (ID: {category_id})")
+        else:
+            logger.warning(f"⚠️ Рубрика {category_slug} не найдена, публикую без рубрики")
     
     try:
         headers = {
@@ -298,8 +306,6 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
         if response.status_code == 201:
             post_link = response.json()['link']
             logger.info(f"✅ Пост создан: {post_link}")
-            if category_added:
-                logger.info(f"✅ Рубрика добавлена: {category_slug}")
             return True, post_link
         else:
             logger.error(f"❌ Ошибка: {response.status_code}")
