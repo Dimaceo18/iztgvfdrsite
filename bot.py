@@ -6,6 +6,7 @@ import time
 import json
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
+from threading import Lock
 
 load_dotenv()
 
@@ -43,6 +44,8 @@ wp_session = requests.Session()
 
 # Хранилище
 pending_posts = {}
+processing_posts = set()  # Для защиты от дублирования
+processing_lock = Lock()
 
 # Базовый URL для Telegram API
 TG_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
@@ -203,7 +206,7 @@ def download_and_upload_media(file_id, is_video=False, max_retries=3):
                 wp_response = wp_upload_session.post(
                     WP_MEDIA_URL,
                     files=files,
-                    timeout=180,
+                    timeout=300,  # Увеличиваем таймаут до 5 минут
                     allow_redirects=True,
                     verify=True
                 )
@@ -215,22 +218,22 @@ def download_and_upload_media(file_id, is_video=False, max_retries=3):
                     source_url = wp_response.json().get('source_url', 'unknown')
                     logger.info(f"✅ {media_type.capitalize()} загружено! ID={media_id}, URL={source_url}")
                     return media_id, source_url
-                elif wp_response.status_code == 500:
-                    logger.warning(f"⚠️ WP вернул 500 ошибку, пробуем ещё раз...")
-                    time.sleep(2 ** attempt)
+                elif wp_response.status_code == 500 or wp_response.status_code == 502 or wp_response.status_code == 503:
+                    logger.warning(f"⚠️ WP вернул ошибку {wp_response.status_code}, пробуем ещё раз...")
+                    time.sleep(5)  # Ждем 5 секунд перед повторной попыткой
                     continue
                 else:
                     logger.error(f"❌ Ошибка WP при загрузке {media_type}: {wp_response.status_code}")
                     logger.error(f"Ответ: {wp_response.text[:500]}")
                     if attempt < max_retries - 1:
-                        time.sleep(2 ** attempt)
+                        time.sleep(3 ** attempt)
                         continue
                     return None, None
                     
             except requests.exceptions.ConnectionError as e:
                 logger.warning(f"⚠️ Ошибка соединения (попытка {attempt + 1}): {e}")
                 if attempt < max_retries - 1:
-                    time.sleep(3 ** attempt)
+                    time.sleep(10)  # Ждем 10 секунд
                     continue
                 else:
                     logger.error(f"❌ Превышено число попыток: {e}")
@@ -239,7 +242,7 @@ def download_and_upload_media(file_id, is_video=False, max_retries=3):
             except requests.exceptions.Timeout as e:
                 logger.warning(f"⚠️ Таймаут (попытка {attempt + 1}): {e}")
                 if attempt < max_retries - 1:
-                    time.sleep(3 ** attempt)
+                    time.sleep(10)
                     continue
                 else:
                     logger.error(f"❌ Превышено число попыток: {e}")
@@ -248,7 +251,7 @@ def download_and_upload_media(file_id, is_video=False, max_retries=3):
             except Exception as e:
                 logger.error(f"❌ Неизвестная ошибка: {e}")
                 if attempt < max_retries - 1:
-                    time.sleep(2 ** attempt)
+                    time.sleep(5)
                     continue
                 else:
                     return None, None
@@ -269,6 +272,11 @@ def download_and_upload_multiple_media(media_file_ids, is_video=False, max_retri
     for idx, file_id in enumerate(media_file_ids):
         logger.info(f"📸 Загрузка медиа {idx + 1}/{len(media_file_ids)}")
         
+        # Добавляем задержку между загрузками, чтобы не перегружать сервер
+        if idx > 0:
+            logger.info(f"⏳ Пауза 3 секунды перед следующей загрузкой...")
+            time.sleep(3)
+        
         # Загружаем каждое медиа отдельно
         media_id, media_url = download_and_upload_media(file_id, is_video, max_retries)
         
@@ -278,6 +286,7 @@ def download_and_upload_multiple_media(media_file_ids, is_video=False, max_retri
                 'url': media_url,
                 'index': idx
             })
+            logger.info(f"✅ Медиа {idx + 1} загружено успешно")
         else:
             logger.warning(f"⚠️ Не удалось загрузить медиа {idx + 1}")
     
@@ -378,6 +387,17 @@ def process_update(update_json):
             parts = data.split('|')
             action = parts[0]
             
+            # Защита от дублирования для publish и draft
+            if action in ['publish', 'draft'] and len(parts) >= 2:
+                post_key = parts[1]
+                
+                # Проверяем, не обрабатывается ли уже этот пост
+                with processing_lock:
+                    if post_key in processing_posts:
+                        logger.warning(f"⚠️ Пост {post_key} уже обрабатывается, пропускаем дубликат")
+                        return
+                    processing_posts.add(post_key)
+            
             if action == 'select_post_type' and len(parts) >= 3:
                 post_key = parts[1]
                 post_type = parts[2]
@@ -440,108 +460,134 @@ def process_update(update_json):
                 return
             
             if action == 'publish' and len(parts) >= 2:
-                post_key = parts[1]
-                post_data = pending_posts.get(post_key)
-                
-                if not post_data:
-                    tg_edit_message_text(chat_id, msg_id, "❌ Пост не найден.")
-                    return
-                
-                if not post_data.get('post_type'):
-                    tg_edit_message_text(chat_id, msg_id, "❌ Раздел не выбран.")
-                    return
-                
-                tg_edit_message_text(chat_id, msg_id, "⏳ Публикую на сайт...")
-                
-                # Загружаем все медиа
-                uploaded_media = []
-                video_url = None
-                is_video = post_data.get('is_video', False)
-                
-                if post_data.get('media_file_ids'):
-                    uploaded_media = download_and_upload_multiple_media(
-                        post_data['media_file_ids'], 
-                        is_video, 
-                        max_retries=3
+                try:
+                    post_key = parts[1]
+                    post_data = pending_posts.get(post_key)
+                    
+                    if not post_data:
+                        tg_edit_message_text(chat_id, msg_id, "❌ Пост не найден.")
+                        with processing_lock:
+                            processing_posts.discard(post_key)
+                        return
+                    
+                    if not post_data.get('post_type'):
+                        tg_edit_message_text(chat_id, msg_id, "❌ Раздел не выбран.")
+                        with processing_lock:
+                            processing_posts.discard(post_key)
+                        return
+                    
+                    tg_edit_message_text(chat_id, msg_id, "⏳ Публикую на сайт...")
+                    
+                    # Загружаем все медиа
+                    uploaded_media = []
+                    video_url = None
+                    is_video = post_data.get('is_video', False)
+                    
+                    if post_data.get('media_file_ids'):
+                        uploaded_media = download_and_upload_multiple_media(
+                            post_data['media_file_ids'], 
+                            is_video, 
+                            max_retries=3
+                        )
+                        
+                        if uploaded_media:
+                            logger.info(f"✅ Загружено {len(uploaded_media)} медиа")
+                            # Если это видео, берем URL первого
+                            if is_video and len(uploaded_media) > 0:
+                                video_url = uploaded_media[0]['url']
+                        else:
+                            logger.error("❌ Медиа НЕ загрузились!")
+                    
+                    # Создаем пост с галереей (если несколько фото) или с видео
+                    success, link = create_wp_post(
+                        post_data['title'],
+                        post_data['content'],
+                        post_data['post_type'],
+                        uploaded_media,
+                        video_url,
+                        True,
+                        is_video,
+                        uploaded_media if not is_video and len(uploaded_media) > 1 else None
                     )
                     
-                    if uploaded_media:
-                        logger.info(f"✅ Загружено {len(uploaded_media)} медиа")
-                        # Если это видео, берем URL первого
-                        if is_video and len(uploaded_media) > 0:
-                            video_url = uploaded_media[0]['url']
+                    if success:
+                        tg_edit_message_text(chat_id, msg_id, f"✅ Пост опубликован!\n\n{link}")
                     else:
-                        logger.error("❌ Медиа НЕ загрузились!")
-                
-                # Создаем пост с галереей (если несколько фото) или с видео
-                success, link = create_wp_post(
-                    post_data['title'],
-                    post_data['content'],
-                    post_data['post_type'],
-                    uploaded_media,  # Все загруженные медиа
-                    video_url,
-                    True,
-                    is_video,
-                    uploaded_media if not is_video and len(uploaded_media) > 1 else None  # Галерея только для фото (больше 1)
-                )
-                
-                if success:
-                    tg_edit_message_text(chat_id, msg_id, f"✅ Пост опубликован!\n\n{link}")
-                else:
-                    tg_edit_message_text(chat_id, msg_id, "❌ Ошибка публикации")
-                
-                del pending_posts[post_key]
+                        tg_edit_message_text(chat_id, msg_id, "❌ Ошибка публикации")
+                    
+                    del pending_posts[post_key]
+                    with processing_lock:
+                        processing_posts.discard(post_key)
+                    
+                except Exception as e:
+                    logger.error(f"Ошибка при публикации: {e}")
+                    tg_edit_message_text(chat_id, msg_id, f"❌ Ошибка: {str(e)[:100]}")
+                    with processing_lock:
+                        processing_posts.discard(post_key)
                 return
             
             if action == 'draft' and len(parts) >= 2:
-                post_key = parts[1]
-                post_data = pending_posts.get(post_key)
-                
-                if not post_data:
-                    tg_edit_message_text(chat_id, msg_id, "❌ Пост не найден.")
-                    return
-                
-                if not post_data.get('post_type'):
-                    tg_edit_message_text(chat_id, msg_id, "❌ Раздел не выбран.")
-                    return
-                
-                tg_edit_message_text(chat_id, msg_id, "⏳ Сохраняю в черновики...")
-                
-                # Загружаем все медиа
-                uploaded_media = []
-                video_url = None
-                is_video = post_data.get('is_video', False)
-                
-                if post_data.get('media_file_ids'):
-                    uploaded_media = download_and_upload_multiple_media(
-                        post_data['media_file_ids'], 
-                        is_video, 
-                        max_retries=3
+                try:
+                    post_key = parts[1]
+                    post_data = pending_posts.get(post_key)
+                    
+                    if not post_data:
+                        tg_edit_message_text(chat_id, msg_id, "❌ Пост не найден.")
+                        with processing_lock:
+                            processing_posts.discard(post_key)
+                        return
+                    
+                    if not post_data.get('post_type'):
+                        tg_edit_message_text(chat_id, msg_id, "❌ Раздел не выбран.")
+                        with processing_lock:
+                            processing_posts.discard(post_key)
+                        return
+                    
+                    tg_edit_message_text(chat_id, msg_id, "⏳ Сохраняю в черновики...")
+                    
+                    # Загружаем все медиа
+                    uploaded_media = []
+                    video_url = None
+                    is_video = post_data.get('is_video', False)
+                    
+                    if post_data.get('media_file_ids'):
+                        uploaded_media = download_and_upload_multiple_media(
+                            post_data['media_file_ids'], 
+                            is_video, 
+                            max_retries=3
+                        )
+                        
+                        if uploaded_media:
+                            logger.info(f"✅ Загружено {len(uploaded_media)} медиа")
+                            if is_video and len(uploaded_media) > 0:
+                                video_url = uploaded_media[0]['url']
+                    
+                    # Создаем пост с галереей (если несколько фото) или с видео
+                    success, link = create_wp_post(
+                        post_data['title'],
+                        post_data['content'],
+                        post_data['post_type'],
+                        uploaded_media,
+                        video_url,
+                        False,
+                        is_video,
+                        uploaded_media if not is_video and len(uploaded_media) > 1 else None
                     )
                     
-                    if uploaded_media:
-                        logger.info(f"✅ Загружено {len(uploaded_media)} медиа")
-                        if is_video and len(uploaded_media) > 0:
-                            video_url = uploaded_media[0]['url']
-                
-                # Создаем пост с галереей (если несколько фото) или с видео
-                success, link = create_wp_post(
-                    post_data['title'],
-                    post_data['content'],
-                    post_data['post_type'],
-                    uploaded_media,
-                    video_url,
-                    False,
-                    is_video,
-                    uploaded_media if not is_video and len(uploaded_media) > 1 else None
-                )
-                
-                if success:
-                    tg_edit_message_text(chat_id, msg_id, f"✅ Пост сохранен в черновиках!\n\n{link}")
-                else:
-                    tg_edit_message_text(chat_id, msg_id, "❌ Ошибка сохранения")
-                
-                del pending_posts[post_key]
+                    if success:
+                        tg_edit_message_text(chat_id, msg_id, f"✅ Пост сохранен в черновиках!\n\n{link}")
+                    else:
+                        tg_edit_message_text(chat_id, msg_id, "❌ Ошибка сохранения")
+                    
+                    del pending_posts[post_key]
+                    with processing_lock:
+                        processing_posts.discard(post_key)
+                    
+                except Exception as e:
+                    logger.error(f"Ошибка при сохранении: {e}")
+                    tg_edit_message_text(chat_id, msg_id, f"❌ Ошибка: {str(e)[:100]}")
+                    with processing_lock:
+                        processing_posts.discard(post_key)
                 return
         
         elif 'message' in update_json:
@@ -591,11 +637,11 @@ def process_update(update_json):
             post_key = str(int(time.time() * 1000))
             pending_posts[post_key] = {
                 'original_text': text,
-                'media_file_ids': media_file_ids,  # Массив ID файлов
+                'media_file_ids': media_file_ids,
                 'is_video': is_video,
                 'title': title,
                 'content': formatted_content,
-                'media_uploaded': []  # Будем хранить загруженные медиа ID
+                'media_uploaded': []
             }
             
             keyboard = {
@@ -618,7 +664,7 @@ def process_update(update_json):
             logger.info(f"✉️ Отправлен выбор раздела, медиа={media_type}")
             
     except Exception as e:
-        logger.error(f"Ошибка: {e}")
+        logger.error(f"Ошибка в process_update: {e}")
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -652,10 +698,16 @@ if __name__ == '__main__':
     logger.info(f"🖼️ Поддержка галереи: ✅ (несколько фото в галерею)")
     logger.info(f"🎬 Поддержка видео: ✅ (шорткод + обложка)")
     logger.info(f"🔍 SEO (Yoast): ✅ (автоматическое заполнение)")
+    logger.info(f"🛡️ Защита от дублирования: ✅")
     
-    requests.post(f"{TG_API_URL}/deleteWebhook")
-    requests.post(f"{TG_API_URL}/setWebhook", json={'url': webhook_url})
-    logger.info("✅ Вебхук установлен")
+    # Удаляем старый вебхук и устанавливаем новый
+    try:
+        requests.post(f"{TG_API_URL}/deleteWebhook", timeout=10)
+        time.sleep(1)
+        response = requests.post(f"{TG_API_URL}/setWebhook", json={'url': webhook_url}, timeout=10)
+        logger.info(f"✅ Вебхук установлен: {response.json()}")
+    except Exception as e:
+        logger.error(f"Ошибка установки вебхука: {e}")
     
     port = int(os.getenv('PORT', 8000))
     app.run(host='0.0.0.0', port=port)
