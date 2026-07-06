@@ -105,8 +105,8 @@ def format_content_for_wp(text, video_url=None, gallery_images=None):
                 if video_url:
                     formatted.append(f'[video width="100%" height="auto" mp4="{video_url}"]')
                 elif gallery_images and len(gallery_images) > 0:
-                    # Создаем галерею с правильными размерами
-                    gallery_shortcode = '[gallery ids="' + ','.join(str(img['id']) for img in gallery_images) + '" size="full" columns="1" link="file"]'
+                    # Создаем галерею с полным размером и без сжатия
+                    gallery_shortcode = '[gallery ids="' + ','.join(str(img['id']) for img in gallery_images) + '" size="full" columns="1" link="none"]'
                     formatted.append(gallery_shortcode)
                     logger.info(f"🖼️ Добавлена галерея из {len(gallery_images)} фото")
     
@@ -188,11 +188,9 @@ def download_and_upload_media(file_id, is_video=False, max_retries=2):
             try:
                 logger.info(f"📸 Загружаю {media_type} в WordPress (попытка {attempt + 1}/{max_retries})...")
                 
-                # Используем НОВУЮ сессию для каждого запроса
                 wp_upload_session = requests.Session()
                 wp_upload_session.auth = (WP_USERNAME, WP_PASSWORD)
                 
-                # Важные заголовки для WordPress
                 wp_upload_session.headers.update({
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                     'Accept': 'application/json',
@@ -214,8 +212,26 @@ def download_and_upload_media(file_id, is_video=False, max_retries=2):
                 logger.info(f"📸 Ответ WP: статус {wp_response.status_code}")
                 
                 if wp_response.status_code == 201:
-                    media_id = wp_response.json()['id']
-                    source_url = wp_response.json().get('source_url', 'unknown')
+                    media_data = wp_response.json()
+                    media_id = media_data['id']
+                    # Берем оригинальный URL без сжатия
+                    source_url = media_data.get('source_url', 'unknown')
+                    
+                    # Получаем полные данные о медиа для получения URL оригинального размера
+                    media_info_response = wp_upload_session.get(
+                        f"{WP_MEDIA_URL}/{media_id}",
+                        auth=(WP_USERNAME, WP_PASSWORD),
+                        timeout=30
+                    )
+                    
+                    if media_info_response.status_code == 200:
+                        media_info = media_info_response.json()
+                        # Берем оригинальный URL
+                        if 'guid' in media_info and 'rendered' in media_info['guid']:
+                            source_url = media_info['guid']['rendered']
+                        elif 'source_url' in media_info:
+                            source_url = media_info['source_url']
+                    
                     logger.info(f"✅ {media_type.capitalize()} загружено! ID={media_id}, URL={source_url}")
                     return media_id, source_url
                 else:
@@ -246,10 +262,15 @@ def download_and_upload_multiple_media(media_file_ids, is_video=False, max_retri
     if not media_file_ids:
         return uploaded_media
     
-    for idx, file_id in enumerate(media_file_ids):
-        logger.info(f"📸 Загрузка медиа {idx + 1}/{len(media_file_ids)}")
+    # Используем set для удаления дубликатов
+    unique_file_ids = list(dict.fromkeys(media_file_ids))
+    
+    if len(unique_file_ids) != len(media_file_ids):
+        logger.info(f"🔄 Удалено дубликатов: {len(media_file_ids) - len(unique_file_ids)}")
+    
+    for idx, file_id in enumerate(unique_file_ids):
+        logger.info(f"📸 Загрузка медиа {idx + 1}/{len(unique_file_ids)}")
         
-        # Небольшая задержка между загрузками
         if idx > 0:
             time.sleep(1)
         
@@ -265,7 +286,7 @@ def download_and_upload_multiple_media(media_file_ids, is_video=False, max_retri
         else:
             logger.warning(f"⚠️ Не удалось загрузить медиа {idx + 1}")
     
-    logger.info(f"✅ Загружено {len(uploaded_media)} из {len(media_file_ids)} медиа")
+    logger.info(f"✅ Загружено {len(uploaded_media)} из {len(unique_file_ids)} уникальных медиа")
     return uploaded_media
 
 def create_wp_post(title, content, post_type, media_ids=None, video_url=None, publish=False, is_video=False, gallery_images=None):
@@ -569,15 +590,14 @@ def process_update(update_json):
             if 'photo' in message:
                 photos = message['photo']
                 if isinstance(photos, list):
-                    for photo in photos:
-                        if isinstance(photo, list):
-                            media_file_ids.append(photo[-1]['file_id'])
-                        elif isinstance(photo, dict) and 'file_id' in photo:
-                            media_file_ids.append(photo['file_id'])
-                else:
-                    media_file_ids.append(photos[-1]['file_id'])
+                    # Берем только самое большое разрешение для каждого уникального фото
+                    # В Telegram photo - это массив из разных размеров одного фото
+                    # Берем последний элемент (самый большой)
+                    if photos and len(photos) > 0:
+                        # Последний элемент - самое большое разрешение
+                        media_file_ids.append(photos[-1]['file_id'])
                 is_video = False
-                logger.info(f"📸 Обнаружено {len(media_file_ids)} ФОТО")
+                logger.info(f"📸 Обнаружено 1 ФОТО")
                 
             elif 'video' in message:
                 media_file_ids.append(message['video']['file_id'])
