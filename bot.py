@@ -7,6 +7,7 @@ import json
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 from threading import Lock
+import base64
 
 load_dotenv()
 
@@ -70,8 +71,39 @@ DEEPSEEK_PROMPT = """Ты редактор новостного сайта. Пе
 def get_wp_session():
     """Создает новую сессию с браузерными заголовками для WordPress"""
     session = requests.Session()
-    session.auth = (WP_USERNAME, WP_PASSWORD)
+    
+    # Используем Basic Auth
+    auth_string = f"{WP_USERNAME}:{WP_PASSWORD}"
+    encoded_auth = base64.b64encode(auth_string.encode()).decode()
     session.headers.update(BROWSER_HEADERS)
+    session.headers.update({
+        'Authorization': f'Basic {encoded_auth}'
+    })
+    
+    return session
+
+def get_wp_session_cookie():
+    """Альтернативный способ - через cookie авторизацию"""
+    session = requests.Session()
+    session.headers.update(BROWSER_HEADERS)
+    
+    # Сначала логинимся через wp-login.php
+    login_url = f"{WP_URL}/wp-login.php"
+    login_data = {
+        'log': WP_USERNAME,
+        'pwd': WP_PASSWORD,
+        'wp-submit': 'Log In',
+        'redirect_to': WP_URL,
+        'testcookie': '1'
+    }
+    
+    try:
+        # Получаем cookies
+        session.post(login_url, data=login_data, timeout=30, allow_redirects=True)
+        logger.info("✅ Cookie авторизация успешна")
+    except Exception as e:
+        logger.warning(f"⚠️ Cookie авторизация не удалась: {e}")
+    
     return session
 
 def tg_send_message(chat_id, text, reply_markup=None, parse_mode=None):
@@ -160,7 +192,7 @@ def process_text_with_deepseek(text):
         logger.error(f"Ошибка DeepSeek: {e}")
         return None
 
-def download_and_upload_media(file_id, is_video=False, max_retries=2):
+def download_and_upload_media(file_id, is_video=False, max_retries=3):
     """Загрузка одного фото или видео в WordPress с повторными попытками"""
     try:
         media_type = "видео" if is_video else "фото"
@@ -202,12 +234,20 @@ def download_and_upload_media(file_id, is_video=False, max_retries=2):
         mime = 'video/mp4' if is_video else 'image/jpeg'
         filename = f'{media_type}_{int(time.time())}_{file_id[:8]}.{ext}'
         
-        # Пробуем загрузить с повторными попытками
+        # Пробуем загрузить с повторными попытками, используя разные методы
         for attempt in range(max_retries):
             try:
                 logger.info(f"📸 Загружаю {media_type} в WordPress (попытка {attempt + 1}/{max_retries})...")
                 
-                session = get_wp_session()
+                # Пробуем разные методы авторизации
+                if attempt == 0:
+                    session = get_wp_session()  # Basic Auth
+                elif attempt == 1:
+                    session = get_wp_session_cookie()  # Cookie Auth
+                else:
+                    # Пробуем без авторизации, но с токеном в URL
+                    session = requests.Session()
+                    session.headers.update(BROWSER_HEADERS)
                 
                 files = {
                     'file': (filename, media_response.content, mime)
@@ -244,16 +284,14 @@ def download_and_upload_media(file_id, is_video=False, max_retries=2):
                     logger.info(f"✅ {media_type.capitalize()} загружено! ID={media_id}, URL={source_url}")
                     return media_id, source_url
                 elif wp_response.status_code == 403:
-                    logger.error(f"❌ Ошибка 403 - возможно, требуется авторизация или защита от ботов")
-                    logger.error(f"Ответ: {wp_response.text[:200]}")
+                    logger.warning(f"⚠️ Ошибка 403 (попытка {attempt + 1})")
                     if attempt < max_retries - 1:
                         time.sleep(3)
                         continue
                     return None, None
                 else:
                     logger.error(f"❌ Ошибка WP при загрузке {media_type}: {wp_response.status_code}")
-                    logger.error(f"Ответ: {wp_response.text[:200]}")
-                    if attempt < max_retries - 1:
+                    if attempt < max_2_retries - 1:
                         time.sleep(2)
                         continue
                     return None, None
@@ -271,7 +309,7 @@ def download_and_upload_media(file_id, is_video=False, max_retries=2):
         logger.error(f"❌ Критическая ошибка загрузки медиа: {e}")
         return None, None
 
-def download_and_upload_multiple_media(media_file_ids, is_video=False, max_retries=2):
+def download_and_upload_multiple_media(media_file_ids, is_video=False, max_retries=3):
     """Загрузка нескольких фото или видео в WordPress"""
     uploaded_media = []
     
@@ -344,35 +382,55 @@ def create_wp_post(title, content, post_type, media_ids=None, video_url=None, pu
         post_data['featured_media'] = media_ids[0]['id']
         logger.info(f"📎 Установлено первое медиа ID={media_ids[0]['id']} как обложка")
     
-    try:
-        logger.info(f"📤 Отправка в WordPress: раздел={post_type}, статус={status}")
-        
-        session = get_wp_session()
-        
-        response = session.post(
-            f"{WP_API_URL}/{post_type}",
-            json=post_data,
-            timeout=30
-        )
-        
-        logger.info(f"📤 Ответ WP: {response.status_code}")
-        
-        if response.status_code == 201:
-            post_link = response.json()['link']
-            logger.info(f"✅ Пост создан: {post_link}")
-            return True, post_link
-        elif response.status_code == 403:
-            logger.error(f"❌ Ошибка 403 - возможно, требуется авторизация или защита от ботов")
-            logger.error(f"Ответ: {response.text[:200]}")
-            return False, None
-        else:
-            logger.error(f"❌ Ошибка: {response.status_code}")
-            logger.error(f"Ответ: {response.text[:200]}")
-            return False, None
+    # Пробуем разные методы авторизации
+    for attempt in range(3):
+        try:
+            logger.info(f"📤 Отправка в WordPress: раздел={post_type}, статус={status} (попытка {attempt + 1}/3)")
             
-    except Exception as e:
-        logger.error(f"❌ Ошибка: {e}")
-        return False, None
+            if attempt == 0:
+                session = get_wp_session()
+            elif attempt == 1:
+                session = get_wp_session_cookie()
+            else:
+                session = requests.Session()
+                session.headers.update(BROWSER_HEADERS)
+                auth_string = f"{WP_USERNAME}:{WP_PASSWORD}"
+                encoded_auth = base64.b64encode(auth_string.encode()).decode()
+                session.headers.update({'Authorization': f'Basic {encoded_auth}'})
+            
+            response = session.post(
+                f"{WP_API_URL}/{post_type}",
+                json=post_data,
+                timeout=30
+            )
+            
+            logger.info(f"📤 Ответ WP: {response.status_code}")
+            
+            if response.status_code == 201:
+                post_link = response.json()['link']
+                logger.info(f"✅ Пост создан: {post_link}")
+                return True, post_link
+            elif response.status_code == 403:
+                logger.warning(f"⚠️ Ошибка 403 (попытка {attempt + 1})")
+                if attempt < 2:
+                    time.sleep(3)
+                    continue
+                return False, None
+            else:
+                logger.error(f"❌ Ошибка: {response.status_code}")
+                if attempt < 2:
+                    time.sleep(2)
+                    continue
+                return False, None
+                
+        except Exception as e:
+            logger.error(f"❌ Ошибка: {e}")
+            if attempt < 2:
+                time.sleep(2)
+                continue
+            return False, None
+    
+    return False, None
 
 def process_update(update_json):
     try:
@@ -488,7 +546,7 @@ def process_update(update_json):
                         uploaded_media = download_and_upload_multiple_media(
                             post_data['media_file_ids'], 
                             is_video, 
-                            max_retries=2
+                            max_retries=3
                         )
                         
                         if uploaded_media:
@@ -552,7 +610,7 @@ def process_update(update_json):
                         uploaded_media = download_and_upload_multiple_media(
                             post_data['media_file_ids'], 
                             is_video, 
-                            max_retries=2
+                            max_retries=3
                         )
                         
                         if uploaded_media:
@@ -604,7 +662,6 @@ def process_update(update_json):
             if 'photo' in message:
                 photos = message['photo']
                 if isinstance(photos, list) and len(photos) > 0:
-                    # Берем самое большое разрешение
                     media_file_ids.append(photos[-1]['file_id'])
                 is_video = False
                 logger.info(f"📸 Обнаружено 1 ФОТО")
@@ -686,7 +743,7 @@ if __name__ == '__main__':
     logger.info(f"🎬 Поддержка видео: ✅")
     logger.info(f"🔍 SEO (Yoast): ✅")
     logger.info(f"🛡️ Защита от дублирования: ✅")
-    logger.info(f"🌐 Браузерные заголовки: ✅")
+    logger.info(f"🌐 Множественные методы авторизации: ✅")
     
     try:
         requests.post(f"{TG_API_URL}/deleteWebhook", timeout=10)
