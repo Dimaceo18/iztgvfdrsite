@@ -40,7 +40,6 @@ POST_TYPES = {
 }
 
 app = Flask(__name__)
-wp_session = requests.Session()
 
 # Хранилище
 pending_posts = {}
@@ -50,9 +49,30 @@ processing_lock = Lock()
 # Базовый URL для Telegram API
 TG_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
+# Браузерные заголовки для обхода защиты
+BROWSER_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'application/json, text/plain, */*',
+    'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Connection': 'keep-alive',
+    'Sec-Fetch-Dest': 'empty',
+    'Sec-Fetch-Mode': 'cors',
+    'Sec-Fetch-Site': 'same-origin',
+    'Cache-Control': 'no-cache',
+    'Pragma': 'no-cache'
+}
+
 DEEPSEEK_PROMPT = """Ты редактор новостного сайта. Перепиши новость в строгом городском формате, объемом около 650 символов. Убери лишнюю воду, сделай интересный заголовок, никаких смайликов. Не используй символы # и ** в ответе. Сохрани главные факты. Расставь абзацы.
 
 ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст."""
+
+def get_wp_session():
+    """Создает новую сессию с браузерными заголовками для WordPress"""
+    session = requests.Session()
+    session.auth = (WP_USERNAME, WP_PASSWORD)
+    session.headers.update(BROWSER_HEADERS)
+    return session
 
 def tg_send_message(chat_id, text, reply_markup=None, parse_mode=None):
     url = f"{TG_API_URL}/sendMessage"
@@ -105,7 +125,6 @@ def format_content_for_wp(text, video_url=None, gallery_images=None):
                 if video_url:
                     formatted.append(f'[video width="100%" height="auto" mp4="{video_url}"]')
                 elif gallery_images and len(gallery_images) > 0:
-                    # Создаем галерею с полным размером и без сжатия
                     gallery_shortcode = '[gallery ids="' + ','.join(str(img['id']) for img in gallery_images) + '" size="full" columns="1" link="none"]'
                     formatted.append(gallery_shortcode)
                     logger.info(f"🖼️ Добавлена галерея из {len(gallery_images)} фото")
@@ -188,20 +207,13 @@ def download_and_upload_media(file_id, is_video=False, max_retries=2):
             try:
                 logger.info(f"📸 Загружаю {media_type} в WordPress (попытка {attempt + 1}/{max_retries})...")
                 
-                wp_upload_session = requests.Session()
-                wp_upload_session.auth = (WP_USERNAME, WP_PASSWORD)
-                
-                wp_upload_session.headers.update({
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                    'Accept': 'application/json',
-                    'Connection': 'close'
-                })
+                session = get_wp_session()
                 
                 files = {
                     'file': (filename, media_response.content, mime)
                 }
                 
-                wp_response = wp_upload_session.post(
+                wp_response = session.post(
                     WP_MEDIA_URL,
                     files=files,
                     timeout=30,
@@ -214,19 +226,16 @@ def download_and_upload_media(file_id, is_video=False, max_retries=2):
                 if wp_response.status_code == 201:
                     media_data = wp_response.json()
                     media_id = media_data['id']
-                    # Берем оригинальный URL без сжатия
                     source_url = media_data.get('source_url', 'unknown')
                     
-                    # Получаем полные данные о медиа для получения URL оригинального размера
-                    media_info_response = wp_upload_session.get(
+                    # Получаем оригинальный URL
+                    media_info_response = session.get(
                         f"{WP_MEDIA_URL}/{media_id}",
-                        auth=(WP_USERNAME, WP_PASSWORD),
                         timeout=30
                     )
                     
                     if media_info_response.status_code == 200:
                         media_info = media_info_response.json()
-                        # Берем оригинальный URL
                         if 'guid' in media_info and 'rendered' in media_info['guid']:
                             source_url = media_info['guid']['rendered']
                         elif 'source_url' in media_info:
@@ -234,6 +243,13 @@ def download_and_upload_media(file_id, is_video=False, max_retries=2):
                     
                     logger.info(f"✅ {media_type.capitalize()} загружено! ID={media_id}, URL={source_url}")
                     return media_id, source_url
+                elif wp_response.status_code == 403:
+                    logger.error(f"❌ Ошибка 403 - возможно, требуется авторизация или защита от ботов")
+                    logger.error(f"Ответ: {wp_response.text[:200]}")
+                    if attempt < max_retries - 1:
+                        time.sleep(3)
+                        continue
+                    return None, None
                 else:
                     logger.error(f"❌ Ошибка WP при загрузке {media_type}: {wp_response.status_code}")
                     logger.error(f"Ответ: {wp_response.text[:200]}")
@@ -262,7 +278,7 @@ def download_and_upload_multiple_media(media_file_ids, is_video=False, max_retri
     if not media_file_ids:
         return uploaded_media
     
-    # Используем set для удаления дубликатов
+    # Удаляем дубликаты
     unique_file_ids = list(dict.fromkeys(media_file_ids))
     
     if len(unique_file_ids) != len(media_file_ids):
@@ -331,14 +347,9 @@ def create_wp_post(title, content, post_type, media_ids=None, video_url=None, pu
     try:
         logger.info(f"📤 Отправка в WordPress: раздел={post_type}, статус={status}")
         
-        wp_post_session = requests.Session()
-        wp_post_session.auth = (WP_USERNAME, WP_PASSWORD)
-        wp_post_session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'application/json'
-        })
+        session = get_wp_session()
         
-        response = wp_post_session.post(
+        response = session.post(
             f"{WP_API_URL}/{post_type}",
             json=post_data,
             timeout=30
@@ -350,6 +361,10 @@ def create_wp_post(title, content, post_type, media_ids=None, video_url=None, pu
             post_link = response.json()['link']
             logger.info(f"✅ Пост создан: {post_link}")
             return True, post_link
+        elif response.status_code == 403:
+            logger.error(f"❌ Ошибка 403 - возможно, требуется авторизация или защита от ботов")
+            logger.error(f"Ответ: {response.text[:200]}")
+            return False, None
         else:
             logger.error(f"❌ Ошибка: {response.status_code}")
             logger.error(f"Ответ: {response.text[:200]}")
@@ -376,7 +391,6 @@ def process_update(update_json):
             parts = data.split('|')
             action = parts[0]
             
-            # Защита от дублирования для publish и draft
             if action in ['publish', 'draft'] and len(parts) >= 2:
                 post_key = parts[1]
                 
@@ -589,13 +603,9 @@ def process_update(update_json):
             
             if 'photo' in message:
                 photos = message['photo']
-                if isinstance(photos, list):
-                    # Берем только самое большое разрешение для каждого уникального фото
-                    # В Telegram photo - это массив из разных размеров одного фото
-                    # Берем последний элемент (самый большой)
-                    if photos and len(photos) > 0:
-                        # Последний элемент - самое большое разрешение
-                        media_file_ids.append(photos[-1]['file_id'])
+                if isinstance(photos, list) and len(photos) > 0:
+                    # Берем самое большое разрешение
+                    media_file_ids.append(photos[-1]['file_id'])
                 is_video = False
                 logger.info(f"📸 Обнаружено 1 ФОТО")
                 
@@ -672,10 +682,11 @@ if __name__ == '__main__':
     logger.info(f"👤 Админ ID: {ADMIN_ID}")
     logger.info(f"🤖 DeepSeek: {'✅' if DEEPSEEK_API_KEY else '❌'}")
     logger.info(f"📂 Доступные разделы: {', '.join(POST_TYPES.values())}")
-    logger.info(f"🖼️ Поддержка галереи: ✅ (несколько фото в галерею)")
-    logger.info(f"🎬 Поддержка видео: ✅ (шорткод + обложка)")
-    logger.info(f"🔍 SEO (Yoast): ✅ (автоматическое заполнение)")
+    logger.info(f"🖼️ Поддержка галереи: ✅")
+    logger.info(f"🎬 Поддержка видео: ✅")
+    logger.info(f"🔍 SEO (Yoast): ✅")
     logger.info(f"🛡️ Защита от дублирования: ✅")
+    logger.info(f"🌐 Браузерные заголовки: ✅")
     
     try:
         requests.post(f"{TG_API_URL}/deleteWebhook", timeout=10)
