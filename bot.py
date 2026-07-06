@@ -8,6 +8,7 @@ from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 from collections import defaultdict
 import threading
+from datetime import datetime, timedelta
 
 load_dotenv()
 
@@ -45,8 +46,10 @@ wp_session = requests.Session()
 
 # Хранилище
 pending_posts = {}
-media_groups = defaultdict(dict)  # Для сбора фото из альбомов
-group_timers = {}  # Таймеры для групп
+media_groups = defaultdict(dict)
+group_timers = {}
+scheduled_posts = {}  # Для отложенных постов
+scheduled_timers = {}  # Таймеры для отложенных постов
 
 # Базовый URL для Telegram API
 TG_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
@@ -69,6 +72,11 @@ def tg_edit_message_text(chat_id, message_id, text, reply_markup=None):
     data = {'chat_id': chat_id, 'message_id': message_id, 'text': text}
     if reply_markup:
         data['reply_markup'] = reply_markup
+    return requests.post(url, json=data, timeout=30)
+
+def tg_delete_message(chat_id, message_id):
+    url = f"{TG_API_URL}/deleteMessage"
+    data = {'chat_id': chat_id, 'message_id': message_id}
     return requests.post(url, json=data, timeout=30)
 
 def tg_answer_callback_query(callback_id):
@@ -207,9 +215,9 @@ def download_and_upload_media(file_id, is_video=False):
         logger.error(f"❌ Ошибка загрузки медиа: {e}")
         return None, None
 
-def create_wp_post(title, content, post_type, media_id=None, video_url=None, publish=False, is_video=False, gallery_ids=None):
+def create_wp_post(title, content, post_type, media_id=None, video_url=None, publish=False, is_video=False, gallery_ids=None, schedule_time=None):
     """Создание поста в WordPress с видео или галереей в контенте и SEO (Yoast)"""
-    status = 'publish' if publish else 'draft'
+    status = 'future' if schedule_time else ('publish' if publish else 'draft')
     
     # Форматируем контент с медиа
     final_content = content
@@ -240,6 +248,11 @@ def create_wp_post(title, content, post_type, media_id=None, video_url=None, pub
             '_yoast_wpseo_metadesc': seo_description
         }
     }
+    
+    # Добавляем время публикации если есть
+    if schedule_time:
+        post_data['date'] = schedule_time.isoformat()
+        logger.info(f"⏰ Запланирована публикация на {schedule_time.strftime('%d.%m.%Y %H:%M')}")
     
     if media_id:
         post_data['featured_media'] = media_id
@@ -272,6 +285,68 @@ def create_wp_post(title, content, post_type, media_id=None, video_url=None, pub
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
         return False, None
+
+def publish_scheduled_post(post_key):
+    """Публикация отложенного поста"""
+    if post_key not in scheduled_posts:
+        return
+    
+    post_data = scheduled_posts[post_key]
+    chat_id = post_data.get('chat_id')
+    msg_id = post_data.get('msg_id')
+    
+    logger.info(f"⏰ Время публикации для поста {post_key}!")
+    
+    try:
+        # Загружаем все медиа
+        media_ids = []
+        gallery_ids = []
+        video_url = None
+        is_video = post_data.get('is_video', False)
+        
+        if post_data.get('media_file_ids'):
+            for idx, file_id in enumerate(post_data['media_file_ids']):
+                logger.info(f"📸 Загрузка медиа {idx + 1}/{len(post_data['media_file_ids'])}")
+                media_id, media_url = download_and_upload_media(file_id, is_video)
+                
+                if media_id:
+                    media_ids.append(media_id)
+                    if is_video and idx == 0:
+                        video_url = media_url
+                    elif not is_video:
+                        gallery_ids.append(media_id)
+                    logger.info(f"✅ Медиа {idx + 1} загружено успешно")
+                else:
+                    logger.warning(f"⚠️ Не удалось загрузить медиа {idx + 1}")
+        
+        media_id = media_ids[0] if media_ids and is_video else None
+        if not is_video and media_ids:
+            media_id = media_ids[0]
+        
+        success, link = create_wp_post(
+            post_data['title'],
+            post_data['content'],
+            post_data['post_type'],
+            media_id,
+            video_url,
+            True,
+            is_video,
+            gallery_ids if not is_video and len(gallery_ids) > 1 else None
+        )
+        
+        if success:
+            tg_send_message(chat_id, f"✅ Пост опубликован по расписанию!\n\n{link}")
+        else:
+            tg_send_message(chat_id, "❌ Ошибка публикации по расписанию")
+        
+        # Удаляем из хранилища
+        del scheduled_posts[post_key]
+        if post_key in scheduled_timers:
+            del scheduled_timers[post_key]
+            
+    except Exception as e:
+        logger.error(f"Ошибка публикации по расписанию: {e}")
+        tg_send_message(chat_id, f"❌ Ошибка публикации по расписанию: {str(e)[:100]}")
 
 def process_media_group(media_group_id):
     """Обработка собранной медиа-группы"""
@@ -313,11 +388,28 @@ def process_media_group(media_group_id):
         'media_uploaded': []
     }
     
+    # Клавиатура с отложенной публикацией
     keyboard = {
-        "inline_keyboard": []
+        "inline_keyboard": [
+            [{"text": "🤖 Переделать текст через ИИ", "callback_data": f"ai|{post_key}"}],
+            [{"text": "📝 Сохранить в черновики", "callback_data": f"draft|{post_key}"}],
+            [{"text": "🌐 Опубликовать сейчас", "callback_data": f"publish|{post_key}"}],
+            [
+                {"text": "⏰ 15 мин", "callback_data": f"schedule|{post_key}|15"},
+                {"text": "⏰ 30 мин", "callback_data": f"schedule|{post_key}|30"},
+                {"text": "⏰ 1 час", "callback_data": f"schedule|{post_key}|60"}
+            ],
+            [
+                {"text": "⏰ 2 часа", "callback_data": f"schedule|{post_key}|120"},
+                {"text": "⏰ 3 часа", "callback_data": f"schedule|{post_key}|180"},
+                {"text": "⏰ 4 часа", "callback_data": f"schedule|{post_key}|240"}
+            ],
+            [
+                {"text": "⏰ 5 часов", "callback_data": f"schedule|{post_key}|300"},
+                {"text": "⏰ 6 часов", "callback_data": f"schedule|{post_key}|360"}
+            ]
+        ]
     }
-    for pt_key, pt_name in POST_TYPES.items():
-        keyboard["inline_keyboard"].append([{"text": pt_name, "callback_data": f"select_post_type|{post_key}|{pt_key}"}])
     
     media_count = len(media_file_ids)
     media_type = "видео" if is_video else f"{media_count} фото" if media_count > 0 else "нет"
@@ -327,10 +419,10 @@ def process_media_group(media_group_id):
         f"Заголовок: {title}\n\n"
         f"Текст: {content[:300]}...\n\n"
         f"Медиа: {media_type}\n\n"
-        f"📂 Выбери раздел для публикации:",
+        f"Выбери действие:",
         json.dumps(keyboard)
     )
-    logger.info(f"✉️ Отправлен выбор раздела, медиа={media_type}")
+    logger.info(f"✉️ Отправлен выбор раздела с таймерами, медиа={media_type}")
     
     # Удаляем группу
     if media_group_id in media_groups:
@@ -366,8 +458,22 @@ def process_update(update_json):
                     keyboard = {
                         "inline_keyboard": [
                             [{"text": "🤖 Переделать текст через ИИ", "callback_data": f"ai|{post_key}"}],
-                            [{"text": "📝 Опубликовать в черновики", "callback_data": f"draft|{post_key}"}],
-                            [{"text": "🌐 Опубликовать на сайт", "callback_data": f"publish|{post_key}"}]
+                            [{"text": "📝 Сохранить в черновики", "callback_data": f"draft|{post_key}"}],
+                            [{"text": "🌐 Опубликовать сейчас", "callback_data": f"publish|{post_key}"}],
+                            [
+                                {"text": "⏰ 15 мин", "callback_data": f"schedule|{post_key}|15"},
+                                {"text": "⏰ 30 мин", "callback_data": f"schedule|{post_key}|30"},
+                                {"text": "⏰ 1 час", "callback_data": f"schedule|{post_key}|60"}
+                            ],
+                            [
+                                {"text": "⏰ 2 часа", "callback_data": f"schedule|{post_key}|120"},
+                                {"text": "⏰ 3 часа", "callback_data": f"schedule|{post_key}|180"},
+                                {"text": "⏰ 4 часа", "callback_data": f"schedule|{post_key}|240"}
+                            ],
+                            [
+                                {"text": "⏰ 5 часов", "callback_data": f"schedule|{post_key}|300"},
+                                {"text": "⏰ 6 часов", "callback_data": f"schedule|{post_key}|360"}
+                            ]
                         ]
                     }
                     
@@ -381,6 +487,54 @@ def process_update(update_json):
                     new_text += "Выбери действие:"
                     
                     tg_edit_message_text(chat_id, msg_id, new_text, json.dumps(keyboard))
+                return
+            
+            if action == 'schedule' and len(parts) >= 3:
+                post_key = parts[1]
+                minutes = int(parts[2])
+                post_data = pending_posts.get(post_key)
+                
+                if not post_data:
+                    tg_edit_message_text(chat_id, msg_id, "❌ Пост не найден.")
+                    return
+                
+                if not post_data.get('post_type'):
+                    tg_edit_message_text(chat_id, msg_id, "❌ Раздел не выбран.")
+                    return
+                
+                # Рассчитываем время публикации
+                schedule_time = datetime.now() + timedelta(minutes=minutes)
+                time_str = schedule_time.strftime('%d.%m.%Y %H:%M')
+                
+                # Сохраняем в отложенные
+                scheduled_posts[post_key] = {
+                    'title': post_data['title'],
+                    'content': post_data['content'],
+                    'post_type': post_data['post_type'],
+                    'media_file_ids': post_data['media_file_ids'],
+                    'is_video': post_data.get('is_video', False),
+                    'chat_id': chat_id,
+                    'msg_id': msg_id
+                }
+                
+                # Запускаем таймер
+                timer = threading.Timer(minutes * 60, publish_scheduled_post, args=[post_key])
+                scheduled_timers[post_key] = timer
+                timer.start()
+                
+                # Удаляем из pending
+                del pending_posts[post_key]
+                
+                tg_edit_message_text(
+                    chat_id, msg_id,
+                    f"✅ Пост запланирован!\n\n"
+                    f"⏰ Публикация: {time_str}\n"
+                    f"📂 Раздел: {POST_TYPES.get(post_data['post_type'], post_data['post_type'])}\n"
+                    f"📝 Заголовок: {post_data['title']}\n\n"
+                    f"🕐 Через {minutes} минут пост будет опубликован автоматически."
+                )
+                
+                logger.info(f"⏰ Пост {post_key} запланирован на {time_str}")
                 return
             
             if action == 'ai' and len(parts) >= 2:
@@ -400,8 +554,22 @@ def process_update(update_json):
                         keyboard = {
                             "inline_keyboard": [
                                 [{"text": "🤖 Переделать текст через ИИ", "callback_data": f"ai|{post_key}"}],
-                                [{"text": "📝 Опубликовать в черновики", "callback_data": f"draft|{post_key}"}],
-                                [{"text": "🌐 Опубликовать на сайт", "callback_data": f"publish|{post_key}"}]
+                                [{"text": "📝 Сохранить в черновики", "callback_data": f"draft|{post_key}"}],
+                                [{"text": "🌐 Опубликовать сейчас", "callback_data": f"publish|{post_key}"}],
+                                [
+                                    {"text": "⏰ 15 мин", "callback_data": f"schedule|{post_key}|15"},
+                                    {"text": "⏰ 30 мин", "callback_data": f"schedule|{post_key}|30"},
+                                    {"text": "⏰ 1 час", "callback_data": f"schedule|{post_key}|60"}
+                                ],
+                                [
+                                    {"text": "⏰ 2 часа", "callback_data": f"schedule|{post_key}|120"},
+                                    {"text": "⏰ 3 часа", "callback_data": f"schedule|{post_key}|180"},
+                                    {"text": "⏰ 4 часа", "callback_data": f"schedule|{post_key}|240"}
+                                ],
+                                [
+                                    {"text": "⏰ 5 часов", "callback_data": f"schedule|{post_key}|300"},
+                                    {"text": "⏰ 6 часов", "callback_data": f"schedule|{post_key}|360"}
+                                ]
                             ]
                         }
                         
@@ -456,9 +624,7 @@ def process_update(update_json):
                     else:
                         logger.error("❌ Медиа НЕ загрузились!")
                 
-                # Для видео используем только первый ID как обложку
                 media_id = media_ids[0] if media_ids and is_video else None
-                # Для фото используем первый ID как обложку, все ID для галереи
                 if not is_video and media_ids:
                     media_id = media_ids[0]
                 
@@ -516,9 +682,7 @@ def process_update(update_json):
                         else:
                             logger.warning(f"⚠️ Не удалось загрузить медиа {idx + 1}")
                 
-                # Для видео используем только первый ID как обложку
                 media_id = media_ids[0] if media_ids and is_video else None
-                # Для фото используем первый ID как обложку, все ID для галереи
                 if not is_video and media_ids:
                     media_id = media_ids[0]
                 
@@ -559,12 +723,10 @@ def process_update(update_json):
             
             # Если это медиа-группа (альбом)
             if media_group_id and has_photo:
-                # Получаем file_id самого большого фото
                 photos = message['photo']
                 if photos and len(photos) > 0:
                     file_id = photos[-1]['file_id']
                     
-                    # Создаем или обновляем группу
                     if media_group_id not in media_groups:
                         media_groups[media_group_id] = {
                             'file_ids': [],
@@ -573,21 +735,17 @@ def process_update(update_json):
                             'chat_id': chat_id
                         }
                     
-                    # Добавляем file_id (если его еще нет)
                     if file_id not in media_groups[media_group_id]['file_ids']:
                         media_groups[media_group_id]['file_ids'].append(file_id)
                     
-                    # Сохраняем текст (если есть)
                     if text and not media_groups[media_group_id]['text']:
                         media_groups[media_group_id]['text'] = text
                     
                     logger.info(f"📸 Добавлено фото в группу {media_group_id}, всего {len(media_groups[media_group_id]['file_ids'])} фото")
                     
-                    # Отменяем предыдущий таймер
                     if media_group_id in group_timers:
                         group_timers[media_group_id].cancel()
                     
-                    # Запускаем новый таймер на 3 секунды
                     timer = threading.Timer(3.0, process_media_group, args=[media_group_id])
                     group_timers[media_group_id] = timer
                     timer.start()
@@ -595,7 +753,7 @@ def process_update(update_json):
                     logger.info(f"⏳ Запущен таймер для группы {media_group_id} на 3 секунды")
                 return
             
-            # Одиночное фото (без media_group_id)
+            # Одиночное фото
             if has_photo and not media_group_id:
                 photos = message['photo']
                 if photos and len(photos) > 0:
@@ -605,7 +763,6 @@ def process_update(update_json):
                 is_video = False
                 logger.info(f"📸 Обнаружено 1 ФОТО (не альбом)")
             
-            # Видео
             elif has_video:
                 media_file_ids = [message['video']['file_id']]
                 is_video = True
@@ -614,16 +771,13 @@ def process_update(update_json):
                 media_file_ids = []
                 is_video = False
             
-            # Если нет текста и нет медиа - пропускаем
             if not text and not media_file_ids:
                 return
             
-            # Если нет текста, но есть медиа
             if not text and media_file_ids:
                 tg_send_message(chat_id, "❌ Отправьте текст новости.\nПервая строка будет заголовком.")
                 return
             
-            # Если есть текст, обрабатываем
             if text and media_file_ids:
                 title, content = extract_title_and_content(text)
                 formatted_content = format_content_for_wp(content, None, None)
@@ -639,10 +793,26 @@ def process_update(update_json):
                 }
                 
                 keyboard = {
-                    "inline_keyboard": []
+                    "inline_keyboard": [
+                        [{"text": "🤖 Переделать текст через ИИ", "callback_data": f"ai|{post_key}"}],
+                        [{"text": "📝 Сохранить в черновики", "callback_data": f"draft|{post_key}"}],
+                        [{"text": "🌐 Опубликовать сейчас", "callback_data": f"publish|{post_key}"}],
+                        [
+                            {"text": "⏰ 15 мин", "callback_data": f"schedule|{post_key}|15"},
+                            {"text": "⏰ 30 мин", "callback_data": f"schedule|{post_key}|30"},
+                            {"text": "⏰ 1 час", "callback_data": f"schedule|{post_key}|60"}
+                        ],
+                        [
+                            {"text": "⏰ 2 часа", "callback_data": f"schedule|{post_key}|120"},
+                            {"text": "⏰ 3 часа", "callback_data": f"schedule|{post_key}|180"},
+                            {"text": "⏰ 4 часа", "callback_data": f"schedule|{post_key}|240"}
+                        ],
+                        [
+                            {"text": "⏰ 5 часов", "callback_data": f"schedule|{post_key}|300"},
+                            {"text": "⏰ 6 часов", "callback_data": f"schedule|{post_key}|360"}
+                        ]
+                    ]
                 }
-                for pt_key, pt_name in POST_TYPES.items():
-                    keyboard["inline_keyboard"].append([{"text": pt_name, "callback_data": f"select_post_type|{post_key}|{pt_key}"}])
                 
                 media_count = len(media_file_ids)
                 media_type = "видео" if is_video else f"{media_count} фото" if media_count > 0 else "нет"
@@ -652,10 +822,10 @@ def process_update(update_json):
                     f"Заголовок: {title}\n\n"
                     f"Текст: {content[:300]}...\n\n"
                     f"Медиа: {media_type}\n\n"
-                    f"📂 Выбери раздел для публикации:",
+                    f"Выбери действие:",
                     json.dumps(keyboard)
                 )
-                logger.info(f"✉️ Отправлен выбор раздела, медиа={media_type}")
+                logger.info(f"✉️ Отправлен выбор раздела с таймерами, медиа={media_type}")
             
     except Exception as e:
         logger.error(f"Ошибка: {e}")
@@ -689,9 +859,10 @@ if __name__ == '__main__':
     logger.info(f"👤 Админ ID: {ADMIN_ID}")
     logger.info(f"🤖 DeepSeek: {'✅' if DEEPSEEK_API_KEY else '❌'}")
     logger.info(f"📂 Доступные разделы: {', '.join(POST_TYPES.values())}")
-    logger.info(f"🖼️ Поддержка галереи: ✅ (несколько фото в галерею)")
-    logger.info(f"🎬 Поддержка видео: ✅ (шорткод + обложка)")
-    logger.info(f"🔍 SEO (Yoast): ✅ (автоматическое заполнение)")
+    logger.info(f"🖼️ Поддержка галереи: ✅")
+    logger.info(f"🎬 Поддержка видео: ✅")
+    logger.info(f"🔍 SEO (Yoast): ✅")
+    logger.info(f"⏰ Отложенная публикация: ✅")
     
     requests.post(f"{TG_API_URL}/deleteWebhook")
     requests.post(f"{TG_API_URL}/setWebhook", json={'url': webhook_url})
