@@ -48,8 +48,8 @@ wp_session = requests.Session()
 pending_posts = {}
 media_groups = defaultdict(dict)
 group_timers = {}
-scheduled_posts = {}  # Для отложенных постов
-scheduled_timers = {}  # Таймеры для отложенных постов
+scheduled_posts = {}
+scheduled_timers = {}
 
 # Базовый URL для Telegram API
 TG_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
@@ -57,6 +57,30 @@ TG_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 DEEPSEEK_PROMPT = """Ты редактор новостного сайта. Перепиши новость в строгом городском формате, объемом около 650 символов. Убери лишнюю воду, сделай интересный заголовок, никаких смайликов. Не используй символы # и ** в ответе. Сохрани главные факты. Расставь абзацы.
 
 ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст."""
+
+def get_action_keyboard(post_key):
+    """Создает клавиатуру с действиями для поста"""
+    return {
+        "inline_keyboard": [
+            [{"text": "🤖 Переделать текст через ИИ", "callback_data": f"ai|{post_key}"}],
+            [{"text": "📝 Сохранить в черновики", "callback_data": f"draft|{post_key}"}],
+            [{"text": "🌐 Опубликовать сейчас", "callback_data": f"publish|{post_key}"}],
+            [
+                {"text": "⏰ 15 мин", "callback_data": f"schedule|{post_key}|15"},
+                {"text": "⏰ 30 мин", "callback_data": f"schedule|{post_key}|30"},
+                {"text": "⏰ 1 час", "callback_data": f"schedule|{post_key}|60"}
+            ],
+            [
+                {"text": "⏰ 2 часа", "callback_data": f"schedule|{post_key}|120"},
+                {"text": "⏰ 3 часа", "callback_data": f"schedule|{post_key}|180"},
+                {"text": "⏰ 4 часа", "callback_data": f"schedule|{post_key}|240"}
+            ],
+            [
+                {"text": "⏰ 5 часов", "callback_data": f"schedule|{post_key}|300"},
+                {"text": "⏰ 6 часов", "callback_data": f"schedule|{post_key}|360"}
+            ]
+        ]
+    }
 
 def tg_send_message(chat_id, text, reply_markup=None, parse_mode=None):
     url = f"{TG_API_URL}/sendMessage"
@@ -388,28 +412,12 @@ def process_media_group(media_group_id):
         'media_uploaded': []
     }
     
-    # Клавиатура с отложенной публикацией
+    # Клавиатура с выбором категории
     keyboard = {
-        "inline_keyboard": [
-            [{"text": "🤖 Переделать текст через ИИ", "callback_data": f"ai|{post_key}"}],
-            [{"text": "📝 Сохранить в черновики", "callback_data": f"draft|{post_key}"}],
-            [{"text": "🌐 Опубликовать сейчас", "callback_data": f"publish|{post_key}"}],
-            [
-                {"text": "⏰ 15 мин", "callback_data": f"schedule|{post_key}|15"},
-                {"text": "⏰ 30 мин", "callback_data": f"schedule|{post_key}|30"},
-                {"text": "⏰ 1 час", "callback_data": f"schedule|{post_key}|60"}
-            ],
-            [
-                {"text": "⏰ 2 часа", "callback_data": f"schedule|{post_key}|120"},
-                {"text": "⏰ 3 часа", "callback_data": f"schedule|{post_key}|180"},
-                {"text": "⏰ 4 часа", "callback_data": f"schedule|{post_key}|240"}
-            ],
-            [
-                {"text": "⏰ 5 часов", "callback_data": f"schedule|{post_key}|300"},
-                {"text": "⏰ 6 часов", "callback_data": f"schedule|{post_key}|360"}
-            ]
-        ]
+        "inline_keyboard": []
     }
+    for pt_key, pt_name in POST_TYPES.items():
+        keyboard["inline_keyboard"].append([{"text": pt_name, "callback_data": f"select_post_type|{post_key}|{pt_key}"}])
     
     media_count = len(media_file_ids)
     media_type = "видео" if is_video else f"{media_count} фото" if media_count > 0 else "нет"
@@ -419,10 +427,10 @@ def process_media_group(media_group_id):
         f"Заголовок: {title}\n\n"
         f"Текст: {content[:300]}...\n\n"
         f"Медиа: {media_type}\n\n"
-        f"Выбери действие:",
+        f"📂 Выбери раздел для публикации:",
         json.dumps(keyboard)
     )
-    logger.info(f"✉️ Отправлен выбор раздела с таймерами, медиа={media_type}")
+    logger.info(f"✉️ Отправлен выбор раздела, медиа={media_type}")
     
     # Удаляем группу
     if media_group_id in media_groups:
@@ -455,27 +463,8 @@ def process_update(update_json):
                 if post_data:
                     post_data['post_type'] = post_type
                     
-                    keyboard = {
-                        "inline_keyboard": [
-                            [{"text": "🤖 Переделать текст через ИИ", "callback_data": f"ai|{post_key}"}],
-                            [{"text": "📝 Сохранить в черновики", "callback_data": f"draft|{post_key}"}],
-                            [{"text": "🌐 Опубликовать сейчас", "callback_data": f"publish|{post_key}"}],
-                            [
-                                {"text": "⏰ 15 мин", "callback_data": f"schedule|{post_key}|15"},
-                                {"text": "⏰ 30 мин", "callback_data": f"schedule|{post_key}|30"},
-                                {"text": "⏰ 1 час", "callback_data": f"schedule|{post_key}|60"}
-                            ],
-                            [
-                                {"text": "⏰ 2 часа", "callback_data": f"schedule|{post_key}|120"},
-                                {"text": "⏰ 3 часа", "callback_data": f"schedule|{post_key}|180"},
-                                {"text": "⏰ 4 часа", "callback_data": f"schedule|{post_key}|240"}
-                            ],
-                            [
-                                {"text": "⏰ 5 часов", "callback_data": f"schedule|{post_key}|300"},
-                                {"text": "⏰ 6 часов", "callback_data": f"schedule|{post_key}|360"}
-                            ]
-                        ]
-                    }
+                    # Показываем кнопки с действиями
+                    keyboard = get_action_keyboard(post_key)
                     
                     section_name = POST_TYPES.get(post_type, post_type)
                     media_count = len(post_data.get('media_file_ids', []))
@@ -551,27 +540,7 @@ def process_update(update_json):
                         post_data['title'] = title
                         post_data['content'] = formatted_content
                         
-                        keyboard = {
-                            "inline_keyboard": [
-                                [{"text": "🤖 Переделать текст через ИИ", "callback_data": f"ai|{post_key}"}],
-                                [{"text": "📝 Сохранить в черновики", "callback_data": f"draft|{post_key}"}],
-                                [{"text": "🌐 Опубликовать сейчас", "callback_data": f"publish|{post_key}"}],
-                                [
-                                    {"text": "⏰ 15 мин", "callback_data": f"schedule|{post_key}|15"},
-                                    {"text": "⏰ 30 мин", "callback_data": f"schedule|{post_key}|30"},
-                                    {"text": "⏰ 1 час", "callback_data": f"schedule|{post_key}|60"}
-                                ],
-                                [
-                                    {"text": "⏰ 2 часа", "callback_data": f"schedule|{post_key}|120"},
-                                    {"text": "⏰ 3 часа", "callback_data": f"schedule|{post_key}|180"},
-                                    {"text": "⏰ 4 часа", "callback_data": f"schedule|{post_key}|240"}
-                                ],
-                                [
-                                    {"text": "⏰ 5 часов", "callback_data": f"schedule|{post_key}|300"},
-                                    {"text": "⏰ 6 часов", "callback_data": f"schedule|{post_key}|360"}
-                                ]
-                            ]
-                        }
+                        keyboard = get_action_keyboard(post_key)
                         
                         media_count = len(post_data.get('media_file_ids', []))
                         media_type = "видео" if post_data.get('is_video') else f"{media_count} фото" if media_count > 0 else "нет"
@@ -753,7 +722,7 @@ def process_update(update_json):
                     logger.info(f"⏳ Запущен таймер для группы {media_group_id} на 3 секунды")
                 return
             
-            # Одиночное фото
+            # Одиночное фото (без media_group_id)
             if has_photo and not media_group_id:
                 photos = message['photo']
                 if photos and len(photos) > 0:
@@ -763,6 +732,7 @@ def process_update(update_json):
                 is_video = False
                 logger.info(f"📸 Обнаружено 1 ФОТО (не альбом)")
             
+            # Видео
             elif has_video:
                 media_file_ids = [message['video']['file_id']]
                 is_video = True
@@ -771,13 +741,16 @@ def process_update(update_json):
                 media_file_ids = []
                 is_video = False
             
+            # Если нет текста и нет медиа - пропускаем
             if not text and not media_file_ids:
                 return
             
+            # Если нет текста, но есть медиа
             if not text and media_file_ids:
                 tg_send_message(chat_id, "❌ Отправьте текст новости.\nПервая строка будет заголовком.")
                 return
             
+            # Если есть текст, обрабатываем
             if text and media_file_ids:
                 title, content = extract_title_and_content(text)
                 formatted_content = format_content_for_wp(content, None, None)
@@ -792,27 +765,12 @@ def process_update(update_json):
                     'media_uploaded': []
                 }
                 
+                # Клавиатура с выбором категории
                 keyboard = {
-                    "inline_keyboard": [
-                        [{"text": "🤖 Переделать текст через ИИ", "callback_data": f"ai|{post_key}"}],
-                        [{"text": "📝 Сохранить в черновики", "callback_data": f"draft|{post_key}"}],
-                        [{"text": "🌐 Опубликовать сейчас", "callback_data": f"publish|{post_key}"}],
-                        [
-                            {"text": "⏰ 15 мин", "callback_data": f"schedule|{post_key}|15"},
-                            {"text": "⏰ 30 мин", "callback_data": f"schedule|{post_key}|30"},
-                            {"text": "⏰ 1 час", "callback_data": f"schedule|{post_key}|60"}
-                        ],
-                        [
-                            {"text": "⏰ 2 часа", "callback_data": f"schedule|{post_key}|120"},
-                            {"text": "⏰ 3 часа", "callback_data": f"schedule|{post_key}|180"},
-                            {"text": "⏰ 4 часа", "callback_data": f"schedule|{post_key}|240"}
-                        ],
-                        [
-                            {"text": "⏰ 5 часов", "callback_data": f"schedule|{post_key}|300"},
-                            {"text": "⏰ 6 часов", "callback_data": f"schedule|{post_key}|360"}
-                        ]
-                    ]
+                    "inline_keyboard": []
                 }
+                for pt_key, pt_name in POST_TYPES.items():
+                    keyboard["inline_keyboard"].append([{"text": pt_name, "callback_data": f"select_post_type|{post_key}|{pt_key}"}])
                 
                 media_count = len(media_file_ids)
                 media_type = "видео" if is_video else f"{media_count} фото" if media_count > 0 else "нет"
@@ -822,10 +780,10 @@ def process_update(update_json):
                     f"Заголовок: {title}\n\n"
                     f"Текст: {content[:300]}...\n\n"
                     f"Медиа: {media_type}\n\n"
-                    f"Выбери действие:",
+                    f"📂 Выбери раздел для публикации:",
                     json.dumps(keyboard)
                 )
-                logger.info(f"✉️ Отправлен выбор раздела с таймерами, медиа={media_type}")
+                logger.info(f"✉️ Отправлен выбор раздела, медиа={media_type}")
             
     except Exception as e:
         logger.error(f"Ошибка: {e}")
@@ -857,16 +815,4 @@ if __name__ == '__main__':
     logger.info(f"🔗 Вебхук: {webhook_url}")
     logger.info(f"📢 Канал: {CHANNEL_ID}")
     logger.info(f"👤 Админ ID: {ADMIN_ID}")
-    logger.info(f"🤖 DeepSeek: {'✅' if DEEPSEEK_API_KEY else '❌'}")
-    logger.info(f"📂 Доступные разделы: {', '.join(POST_TYPES.values())}")
-    logger.info(f"🖼️ Поддержка галереи: ✅")
-    logger.info(f"🎬 Поддержка видео: ✅")
-    logger.info(f"🔍 SEO (Yoast): ✅")
-    logger.info(f"⏰ Отложенная публикация: ✅")
-    
-    requests.post(f"{TG_API_URL}/deleteWebhook")
-    requests.post(f"{TG_API_URL}/setWebhook", json={'url': webhook_url})
-    logger.info("✅ Вебхук установлен")
-    
-    port = int(os.getenv('PORT', 8000))
-    app.run(host='0.0.0.0', port=port)
+    logger.info(f"🤖 DeepSeek: {'✅' if DEEPSEEK_API_KEY
