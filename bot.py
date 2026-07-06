@@ -6,7 +6,6 @@ import time
 import json
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
-from collections import defaultdict
 
 load_dotenv()
 
@@ -44,8 +43,6 @@ wp_session = requests.Session()
 
 # Хранилище
 pending_posts = {}
-media_groups = defaultdict(list)  # Для сбора фото из альбомов
-processed_groups = set()  # Для отслеживания обработанных групп
 
 # Базовый URL для Telegram API
 TG_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
@@ -84,7 +81,7 @@ def extract_title_and_content(text):
     content = '\n'.join(lines[1:]).strip() if len(lines) > 1 else ""
     return title, content
 
-def format_content_for_wp(text, video_url=None, gallery_images=None):
+def format_content_for_wp(text, video_url=None, gallery_ids=None):
     """Форматирование контента для WordPress с вставкой видео или галереи после первого абзаца"""
     if not text:
         return ""
@@ -104,10 +101,11 @@ def format_content_for_wp(text, video_url=None, gallery_images=None):
             if i == 0:
                 if video_url:
                     formatted.append(f'[video width="100%" height="auto" mp4="{video_url}"]')
-                elif gallery_images and len(gallery_images) > 0:
-                    gallery_shortcode = '[gallery ids="' + ','.join(str(img['id']) for img in gallery_images) + '" size="full" columns="1" link="none"]'
+                elif gallery_ids and len(gallery_ids) > 0:
+                    # Используем size="full" для оригинального размера, columns="1" для одной колонки
+                    gallery_shortcode = '[gallery ids="' + ','.join(str(id) for id in gallery_ids) + '" size="full" columns="1"]'
                     formatted.append(gallery_shortcode)
-                    logger.info(f"🖼️ Добавлена галерея из {len(gallery_images)} фото")
+                    logger.info(f"🖼️ Добавлена галерея из {len(gallery_ids)} фото")
     
     return '\n'.join(formatted)
 
@@ -206,50 +204,15 @@ def download_and_upload_media(file_id, is_video=False):
         logger.error(f"❌ Ошибка загрузки медиа: {e}")
         return None, None
 
-def download_and_upload_multiple_media(media_file_ids, is_video=False):
-    """Загрузка нескольких фото или видео в WordPress"""
-    uploaded_media = []
-    
-    if not media_file_ids:
-        return uploaded_media
-    
-    # Удаляем дубликаты (если они есть)
-    unique_file_ids = list(dict.fromkeys(media_file_ids))
-    
-    if len(unique_file_ids) != len(media_file_ids):
-        logger.info(f"🔄 Удалено дубликатов: {len(media_file_ids) - len(unique_file_ids)}")
-    
-    for idx, file_id in enumerate(unique_file_ids):
-        logger.info(f"📸 Загрузка медиа {idx + 1}/{len(unique_file_ids)}")
-        
-        # Небольшая задержка между загрузками
-        if idx > 0:
-            time.sleep(1)
-        
-        media_id, media_url = download_and_upload_media(file_id, is_video)
-        
-        if media_id:
-            uploaded_media.append({
-                'id': media_id,
-                'url': media_url,
-                'index': idx
-            })
-            logger.info(f"✅ Медиа {idx + 1} загружено успешно")
-        else:
-            logger.warning(f"⚠️ Не удалось загрузить медиа {idx + 1}")
-    
-    logger.info(f"✅ Загружено {len(uploaded_media)} из {len(unique_file_ids)} уникальных медиа")
-    return uploaded_media
-
-def create_wp_post(title, content, post_type, media_ids=None, video_url=None, publish=False, is_video=False, gallery_images=None):
+def create_wp_post(title, content, post_type, media_id=None, video_url=None, publish=False, is_video=False, gallery_ids=None):
     """Создание поста в WordPress с видео или галереей в контенте и SEO (Yoast)"""
     status = 'publish' if publish else 'draft'
     
     # Форматируем контент с медиа
     final_content = content
-    if gallery_images and len(gallery_images) > 0:
-        final_content = format_content_for_wp(content, None, gallery_images)
-        logger.info(f"🖼️ Галерея из {len(gallery_images)} фото добавлена в контент")
+    if gallery_ids and len(gallery_ids) > 0:
+        final_content = format_content_for_wp(content, None, gallery_ids)
+        logger.info(f"🖼️ Галерея из {len(gallery_ids)} фото добавлена в контент")
     elif video_url:
         final_content = format_content_for_wp(content, video_url, None)
         logger.info(f"🎬 Видео URL {video_url} вставлен в контент")
@@ -275,9 +238,9 @@ def create_wp_post(title, content, post_type, media_ids=None, video_url=None, pu
         }
     }
     
-    if media_ids and len(media_ids) > 0:
-        post_data['featured_media'] = media_ids[0]['id']
-        logger.info(f"📎 Установлено первое медиа ID={media_ids[0]['id']} как обложка")
+    if media_id:
+        post_data['featured_media'] = media_id
+        logger.info(f"📎 Устанавливаю медиа ID={media_id} как обложку")
     
     try:
         logger.info(f"📤 Отправка в WordPress: раздел={post_type}, статус={status}")
@@ -399,32 +362,47 @@ def process_update(update_json):
                 
                 tg_edit_message_text(chat_id, msg_id, "⏳ Публикую на сайт...")
                 
-                uploaded_media = []
+                # Загружаем все медиа
+                media_ids = []
+                gallery_ids = []
                 video_url = None
                 is_video = post_data.get('is_video', False)
                 
                 if post_data.get('media_file_ids'):
-                    uploaded_media = download_and_upload_multiple_media(
-                        post_data['media_file_ids'], 
-                        is_video
-                    )
+                    for idx, file_id in enumerate(post_data['media_file_ids']):
+                        logger.info(f"📸 Загрузка медиа {idx + 1}/{len(post_data['media_file_ids'])}")
+                        media_id, media_url = download_and_upload_media(file_id, is_video)
+                        
+                        if media_id:
+                            media_ids.append(media_id)
+                            if is_video and idx == 0:
+                                video_url = media_url
+                            elif not is_video:
+                                gallery_ids.append(media_id)
+                            logger.info(f"✅ Медиа {idx + 1} загружено успешно")
+                        else:
+                            logger.warning(f"⚠️ Не удалось загрузить медиа {idx + 1}")
                     
-                    if uploaded_media:
-                        logger.info(f"✅ Загружено {len(uploaded_media)} медиа")
-                        if is_video and len(uploaded_media) > 0:
-                            video_url = uploaded_media[0]['url']
+                    if media_ids:
+                        logger.info(f"✅ Загружено {len(media_ids)} медиа")
                     else:
                         logger.error("❌ Медиа НЕ загрузились!")
+                
+                # Для видео используем только первый ID как обложку
+                media_id = media_ids[0] if media_ids and is_video else None
+                # Для фото используем первый ID как обложку, все ID для галереи
+                if not is_video and media_ids:
+                    media_id = media_ids[0]  # Первое фото как обложка
                 
                 success, link = create_wp_post(
                     post_data['title'],
                     post_data['content'],
                     post_data['post_type'],
-                    uploaded_media,
+                    media_id,
                     video_url,
                     True,
                     is_video,
-                    uploaded_media if not is_video and len(uploaded_media) > 1 else None
+                    gallery_ids if not is_video and len(gallery_ids) > 1 else None
                 )
                 
                 if success:
@@ -449,30 +427,42 @@ def process_update(update_json):
                 
                 tg_edit_message_text(chat_id, msg_id, "⏳ Сохраняю в черновики...")
                 
-                uploaded_media = []
+                # Загружаем все медиа
+                media_ids = []
+                gallery_ids = []
                 video_url = None
                 is_video = post_data.get('is_video', False)
                 
                 if post_data.get('media_file_ids'):
-                    uploaded_media = download_and_upload_multiple_media(
-                        post_data['media_file_ids'], 
-                        is_video
-                    )
-                    
-                    if uploaded_media:
-                        logger.info(f"✅ Загружено {len(uploaded_media)} медиа")
-                        if is_video and len(uploaded_media) > 0:
-                            video_url = uploaded_media[0]['url']
+                    for idx, file_id in enumerate(post_data['media_file_ids']):
+                        logger.info(f"📸 Загрузка медиа {idx + 1}/{len(post_data['media_file_ids'])}")
+                        media_id, media_url = download_and_upload_media(file_id, is_video)
+                        
+                        if media_id:
+                            media_ids.append(media_id)
+                            if is_video and idx == 0:
+                                video_url = media_url
+                            elif not is_video:
+                                gallery_ids.append(media_id)
+                            logger.info(f"✅ Медиа {idx + 1} загружено успешно")
+                        else:
+                            logger.warning(f"⚠️ Не удалось загрузить медиа {idx + 1}")
+                
+                # Для видео используем только первый ID как обложку
+                media_id = media_ids[0] if media_ids and is_video else None
+                # Для фото используем первый ID как обложку, все ID для галереи
+                if not is_video and media_ids:
+                    media_id = media_ids[0]
                 
                 success, link = create_wp_post(
                     post_data['title'],
                     post_data['content'],
                     post_data['post_type'],
-                    uploaded_media,
+                    media_id,
                     video_url,
                     False,
                     is_video,
-                    uploaded_media if not is_video and len(uploaded_media) > 1 else None
+                    gallery_ids if not is_video and len(gallery_ids) > 1 else None
                 )
                 
                 if success:
@@ -493,105 +483,74 @@ def process_update(update_json):
                 return
             
             text = message.get('caption') or message.get('text', '')
-            media_group_id = message.get('media_group_id')
             
-            # Проверяем, есть ли медиа в сообщении
-            has_media = 'photo' in message or 'video' in message
+            media_file_ids = []
+            is_video = False
             
-            # Если есть media_group_id, собираем все фото из группы
-            if media_group_id and 'photo' in message:
-                # Добавляем фото в группу
-                if media_group_id not in media_groups:
-                    media_groups[media_group_id] = []
-                
-                # Добавляем file_id самого большого размера
+            # Правильная обработка фото из Telegram
+            if 'photo' in message:
                 photos = message['photo']
-                if photos and len(photos) > 0:
-                    media_groups[media_group_id].append(photos[-1]['file_id'])
                 
-                logger.info(f"📸 Добавлено фото в группу {media_group_id}, всего {len(media_groups[media_group_id])} фото")
+                # В Telegram photo может быть массивом размеров одного фото
+                # или массивом фото (альбом)
+                if photos:
+                    # Проверяем, является ли первый элемент списком
+                    if isinstance(photos[0], list):
+                        # Это альбом с несколькими фото
+                        for photo_group in photos:
+                            if photo_group and len(photo_group) > 0:
+                                # Берем самое большое разрешение
+                                media_file_ids.append(photo_group[-1]['file_id'])
+                    else:
+                        # Это одно фото с разными размерами
+                        media_file_ids.append(photos[-1]['file_id'])
                 
-                # Если это первое сообщение с текстом или это не альбом, обрабатываем сразу
-                # Для альбомов ждем все фото
-                if media_group_id in processed_groups:
-                    return
-                
-                # Ждем 2 секунды для сбора всех фото из альбома
-                time.sleep(2)
-                
-                # Проверяем, все ли фото собраны (можно добавить проверку по количеству)
-                # Если в группе есть фото, обрабатываем
-                if media_groups[media_group_id]:
-                    media_file_ids = media_groups[media_group_id].copy()
-                    processed_groups.add(media_group_id)
-                    is_video = False
-                    logger.info(f"📸 Собрано {len(media_file_ids)} ФОТО из альбома")
-                    
-                    # Удаляем группу
-                    del media_groups[media_group_id]
-                else:
-                    return
-                    
-            elif 'photo' in message and not media_group_id:
-                # Одно фото без группы
-                photos = message['photo']
-                if photos and len(photos) > 0:
-                    media_file_ids = [photos[-1]['file_id']]
-                else:
-                    media_file_ids = []
                 is_video = False
-                logger.info(f"📸 Обнаружено 1 ФОТО")
+                logger.info(f"📸 Обнаружено {len(media_file_ids)} ФОТО")
                 
             elif 'video' in message:
-                media_file_ids = [message['video']['file_id']]
+                media_file_ids.append(message['video']['file_id'])
                 is_video = True
                 logger.info("🎬 Обнаружено ВИДЕО")
-            else:
-                media_file_ids = []
-                is_video = False
             
-            # Если нет текста и нет медиа - пропускаем
             if not text and not media_file_ids:
                 return
             
-            # Если нет текста, но есть медиа - берем текст из первого сообщения
-            if not text and media_file_ids:
+            if not text:
                 tg_send_message(chat_id, "❌ Отправьте текст новости.\nПервая строка будет заголовком.")
                 return
             
-            # Если текст есть, обрабатываем
-            if text:
-                title, content = extract_title_and_content(text)
-                formatted_content = format_content_for_wp(content, None, None)
-                
-                post_key = str(int(time.time() * 1000))
-                pending_posts[post_key] = {
-                    'original_text': text,
-                    'media_file_ids': media_file_ids,
-                    'is_video': is_video,
-                    'title': title,
-                    'content': formatted_content,
-                    'media_uploaded': []
-                }
-                
-                keyboard = {
-                    "inline_keyboard": []
-                }
-                for pt_key, pt_name in POST_TYPES.items():
-                    keyboard["inline_keyboard"].append([{"text": pt_name, "callback_data": f"select_post_type|{post_key}|{pt_key}"}])
-                
-                media_count = len(media_file_ids)
-                media_type = "видео" if is_video else f"{media_count} фото" if media_count > 0 else "нет"
-                tg_send_message(
-                    chat_id,
-                    f"📢 Пост получен!\n\n"
-                    f"Заголовок: {title}\n\n"
-                    f"Текст: {content[:300]}...\n\n"
-                    f"Медиа: {media_type}\n\n"
-                    f"📂 Выбери раздел для публикации:",
-                    json.dumps(keyboard)
-                )
-                logger.info(f"✉️ Отправлен выбор раздела, медиа={media_type}")
+            title, content = extract_title_and_content(text)
+            formatted_content = format_content_for_wp(content, None, None)
+            
+            post_key = str(int(time.time() * 1000))
+            pending_posts[post_key] = {
+                'original_text': text,
+                'media_file_ids': media_file_ids,
+                'is_video': is_video,
+                'title': title,
+                'content': formatted_content,
+                'media_uploaded': []
+            }
+            
+            keyboard = {
+                "inline_keyboard": []
+            }
+            for pt_key, pt_name in POST_TYPES.items():
+                keyboard["inline_keyboard"].append([{"text": pt_name, "callback_data": f"select_post_type|{post_key}|{pt_key}"}])
+            
+            media_count = len(media_file_ids)
+            media_type = "видео" if is_video else f"{media_count} фото" if media_count > 0 else "нет"
+            tg_send_message(
+                chat_id,
+                f"📢 Пост получен!\n\n"
+                f"Заголовок: {title}\n\n"
+                f"Текст: {content[:300]}...\n\n"
+                f"Медиа: {media_type}\n\n"
+                f"📂 Выбери раздел для публикации:",
+                json.dumps(keyboard)
+            )
+            logger.info(f"✉️ Отправлен выбор раздела, медиа={media_type}")
             
     except Exception as e:
         logger.error(f"Ошибка: {e}")
