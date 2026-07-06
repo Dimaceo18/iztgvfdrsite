@@ -815,4 +815,16 @@ if __name__ == '__main__':
     logger.info(f"🔗 Вебхук: {webhook_url}")
     logger.info(f"📢 Канал: {CHANNEL_ID}")
     logger.info(f"👤 Админ ID: {ADMIN_ID}")
-    logger.info(f"🤖 DeepSeek: {'✅' if DEEPSEEK_API_KEY
+    logger.info(f"🤖 DeepSeek: {'✅' if DEEPSEEK_API_KEY else '❌'}")
+    logger.info(f"📂 Доступные разделы: {', '.join(POST_TYPES.values())}")
+    logger.info(f"🖼️ Поддержка галереи: ✅")
+    logger.info(f"🎬 Поддержка видео: ✅")
+    logger.info(f"🔍 SEO (Yoast): ✅")
+    logger.info(f"⏰ Отложенная публикация: ✅")
+    
+    requests.post(f"{TG_API_URL}/deleteWebhook")
+    requests.post(f"{TG_API_URL}/setWebhook", json={'url': webhook_url})
+    logger.info("✅ Вебхук установлен")
+    
+    port = int(os.getenv('PORT', 8000))
+    app.run(host='0.0.0.0', port=port)
