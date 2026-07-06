@@ -7,6 +7,7 @@ import json
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 from collections import defaultdict
+import threading
 
 load_dotenv()
 
@@ -44,7 +45,8 @@ wp_session = requests.Session()
 
 # Хранилище
 pending_posts = {}
-media_groups = defaultdict(list)  # Для сбора фото из альбомов
+media_groups = defaultdict(dict)  # Для сбора фото из альбомов
+group_timers = {}  # Таймеры для групп
 
 # Базовый URL для Telegram API
 TG_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
@@ -271,12 +273,13 @@ def create_wp_post(title, content, post_type, media_id=None, video_url=None, pub
         logger.error(f"❌ Ошибка: {e}")
         return False, None
 
-def process_media_group(media_group_id, chat_id):
+def process_media_group(media_group_id):
     """Обработка собранной медиа-группы"""
     if media_group_id not in media_groups:
         return
     
     group_data = media_groups[media_group_id]
+    chat_id = group_data.get('chat_id')
     
     # Проверяем, есть ли текст
     if not group_data.get('text'):
@@ -330,7 +333,10 @@ def process_media_group(media_group_id, chat_id):
     logger.info(f"✉️ Отправлен выбор раздела, медиа={media_type}")
     
     # Удаляем группу
-    del media_groups[media_group_id]
+    if media_group_id in media_groups:
+        del media_groups[media_group_id]
+    if media_group_id in group_timers:
+        del group_timers[media_group_id]
 
 def process_update(update_json):
     try:
@@ -558,17 +564,16 @@ def process_update(update_json):
                 if photos and len(photos) > 0:
                     file_id = photos[-1]['file_id']
                     
-                    # Добавляем в группу
+                    # Создаем или обновляем группу
                     if media_group_id not in media_groups:
                         media_groups[media_group_id] = {
                             'file_ids': [],
                             'text': '',
                             'is_video': False,
-                            'chat_id': chat_id,
-                            'last_update': time.time()
+                            'chat_id': chat_id
                         }
                     
-                    # Добавляем file_id
+                    # Добавляем file_id (если его еще нет)
                     if file_id not in media_groups[media_group_id]['file_ids']:
                         media_groups[media_group_id]['file_ids'].append(file_id)
                     
@@ -578,11 +583,16 @@ def process_update(update_json):
                     
                     logger.info(f"📸 Добавлено фото в группу {media_group_id}, всего {len(media_groups[media_group_id]['file_ids'])} фото")
                     
-                    # Ждем 3 секунды для сбора всех фото
-                    time.sleep(3)
+                    # Отменяем предыдущий таймер
+                    if media_group_id in group_timers:
+                        group_timers[media_group_id].cancel()
                     
-                    # Обрабатываем группу
-                    process_media_group(media_group_id, chat_id)
+                    # Запускаем новый таймер на 3 секунды
+                    timer = threading.Timer(3.0, process_media_group, args=[media_group_id])
+                    group_timers[media_group_id] = timer
+                    timer.start()
+                    
+                    logger.info(f"⏳ Запущен таймер для группы {media_group_id} на 3 секунды")
                 return
             
             # Одиночное фото (без media_group_id)
