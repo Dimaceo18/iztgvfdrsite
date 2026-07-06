@@ -495,22 +495,25 @@ def process_update(update_json):
             is_video = False
             
             if 'photo' in message:
-                # В Telegram может быть несколько фото в одном сообщении
+                # Правильная обработка фото из Telegram
                 photos = message['photo']
-                if isinstance(photos, list):
-                    # Если это список фото, берем только самые большие размеры
-                    # Но в Telegram photo - это массив размеров одного фото
-                    # Поэтому берем последний элемент (самый большой)
-                    if photos and len(photos) > 0:
-                        # Проверяем, не массив ли это массивов (несколько фото)
-                        if isinstance(photos[0], list):
-                            # Несколько фото, берем самое большое каждого
-                            for photo in photos:
-                                if isinstance(photo, list) and len(photo) > 0:
-                                    media_file_ids.append(photo[-1]['file_id'])
-                        else:
-                            # Одно фото, берем самое большое разрешение
-                            media_file_ids.append(photos[-1]['file_id'])
+                
+                # В Telegram photo может быть:
+                # 1. Массив размеров одного фото: [photo_size1, photo_size2, photo_size3]
+                # 2. Массив фото (альбом): [[photo_size1, photo_size2], [photo_size1, photo_size2]]
+                
+                # Проверяем, является ли первый элемент массивом
+                if photos and len(photos) > 0:
+                    if isinstance(photos[0], list):
+                        # Это альбом с несколькими фото
+                        for photo_group in photos:
+                            if isinstance(photo_group, list) and len(photo_group) > 0:
+                                # Берем самое большое разрешение
+                                media_file_ids.append(photo_group[-1]['file_id'])
+                    else:
+                        # Это одно фото с разными размерами
+                        media_file_ids.append(photos[-1]['file_id'])
+                
                 is_video = False
                 logger.info(f"📸 Обнаружено {len(media_file_ids)} ФОТО")
                 
