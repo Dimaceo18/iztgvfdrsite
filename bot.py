@@ -784,7 +784,8 @@ def process_update(update_json):
             # Одиночное фото (без media_group_id)
             if has_photo and not media_group_id:
                 # Проверяем, ожидаем ли мы фото для видео
-                video_key = None                for key in list(video_pending.keys()):
+                video_key = None                
+                for key in list(video_pending.keys()):
                     if video_pending[key].get('chat_id') == chat_id:
                         video_key = key
                         break
