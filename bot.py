@@ -84,6 +84,15 @@ def get_action_keyboard(post_key):
         ]
     }
 
+def get_post_type_keyboard(post_key):
+    """Создает клавиатуру с выбором раздела"""
+    keyboard = {
+        "inline_keyboard": []
+    }
+    for pt_key, pt_name in POST_TYPES.items():
+        keyboard["inline_keyboard"].append([{"text": pt_name, "callback_data": f"select_post_type|{post_key}|{pt_key}"}])
+    return keyboard
+
 def tg_send_message(chat_id, text, reply_markup=None, parse_mode=None):
     url = f"{TG_API_URL}/sendMessage"
     data = {'chat_id': chat_id, 'text': text}
@@ -422,11 +431,7 @@ def process_media_group(media_group_id):
     }
     
     # Клавиатура с выбором категории
-    keyboard = {
-        "inline_keyboard": []
-    }
-    for pt_key, pt_name in POST_TYPES.items():
-        keyboard["inline_keyboard"].append([{"text": pt_name, "callback_data": f"select_post_type|{post_key}|{pt_key}"}])
+    keyboard = get_post_type_keyboard(post_key)
     
     media_count = len(media_file_ids)
     media_type = "видео" if is_video else f"{media_count} фото" if media_count > 0 else "нет"
@@ -471,20 +476,51 @@ def process_update(update_json):
                 
                 if post_data:
                     post_data['post_type'] = post_type
-                    
-                    # Показываем кнопки с действиями
-                    keyboard = get_action_keyboard(post_key)
-                    
                     section_name = POST_TYPES.get(post_type, post_type)
-                    media_count = len(post_data.get('media_file_ids', []))
-                    media_type = "видео" if post_data.get('is_video') else f"{media_count} фото" if media_count > 0 else "нет"
-                    new_text = f"✅ Выбран раздел: {section_name}\n\n"
-                    new_text += f"Заголовок: {post_data.get('title', 'Без заголовка')}\n\n"
-                    new_text += f"Текст: {post_data.get('content', '')[:300]}...\n\n"
-                    new_text += f"Медиа: {media_type}\n\n"
-                    new_text += "Выбери действие:"
                     
-                    tg_edit_message_text(chat_id, msg_id, new_text, json.dumps(keyboard))
+                    # Проверяем, есть ли уже обложка (для видео)
+                    if post_data.get('thumbnail_id'):
+                        # Если обложка уже есть - показываем действия
+                        keyboard = get_action_keyboard(post_key)
+                        media_count = len(post_data.get('media_file_ids', []))
+                        media_type = "видео" if post_data.get('is_video') else f"{media_count} фото" if media_count > 0 else "нет"
+                        new_text = f"✅ Выбран раздел: {section_name}\n\n"
+                        new_text += f"Заголовок: {post_data.get('title', 'Без заголовка')}\n\n"
+                        new_text += f"Текст: {post_data.get('content', '')[:300]}...\n\n"
+                        new_text += f"Медиа: {media_type}\n\n"
+                        new_text += "Выбери действие:"
+                        
+                        tg_edit_message_text(chat_id, msg_id, new_text, json.dumps(keyboard))
+                    else:
+                        # Если это видео - запрашиваем фото для обложки
+                        if post_data.get('is_video'):
+                            # Запрашиваем фото для обложки
+                            video_pending[post_key] = {
+                                'post_key': post_key,
+                                'chat_id': chat_id,
+                                'msg_id': msg_id
+                            }
+                            
+                            new_text = f"✅ Выбран раздел: {section_name}\n\n"
+                            new_text += f"🎬 Видео получено!\n\n"
+                            new_text += f"📸 Теперь отправь фото для заглавной (обложки) этого видео.\n\n"
+                            new_text += f"Это фото будет использовано как превью для поста.\n\n"
+                            new_text += f"Заголовок: {post_data.get('title', 'Без заголовка')}\n\n"
+                            new_text += f"Текст: {post_data.get('content', '')[:200]}..."
+                            
+                            tg_edit_message_text(chat_id, msg_id, new_text)
+                        else:
+                            # Обычный пост с фото - показываем действия
+                            keyboard = get_action_keyboard(post_key)
+                            media_count = len(post_data.get('media_file_ids', []))
+                            media_type = "видео" if post_data.get('is_video') else f"{media_count} фото" if media_count > 0 else "нет"
+                            new_text = f"✅ Выбран раздел: {section_name}\n\n"
+                            new_text += f"Заголовок: {post_data.get('title', 'Без заголовка')}\n\n"
+                            new_text += f"Текст: {post_data.get('content', '')[:300]}...\n\n"
+                            new_text += f"Медиа: {media_type}\n\n"
+                            new_text += "Выбери действие:"
+                            
+                            tg_edit_message_text(chat_id, msg_id, new_text, json.dumps(keyboard))
                 return
             
             if action == 'schedule' and len(parts) >= 3:
@@ -513,7 +549,7 @@ def process_update(update_json):
                     'is_video': post_data.get('is_video', False),
                     'chat_id': chat_id,
                     'msg_id': msg_id,
-                    'thumbnail_id': post_data.get('thumbnail_id')  # Сохраняем ID обложки
+                    'thumbnail_id': post_data.get('thumbnail_id')
                 }
                 
                 # Запускаем таймер
@@ -763,35 +799,47 @@ def process_update(update_json):
                         # Сохраняем ID фото для обложки
                         pending_data = video_pending[video_key]
                         post_key = pending_data['post_key']
+                        msg_id = pending_data.get('msg_id')
                         
                         if post_key in pending_posts:
                             pending_posts[post_key]['thumbnail_id'] = file_id
-                            pending_posts[post_key]['media_file_ids'].append(file_id)
+                            # Добавляем фото в медиа файлы (для галереи, если нужно)
+                            # Но не добавляем в media_file_ids, чтобы не дублировать
                             logger.info(f"📸 Получено фото для обложки к видео, post_key={post_key}")
                             
                             # Показываем сообщение об успехе и продолжаем обработку
-                            tg_send_message(chat_id, "✅ Фото для обложки получено! Теперь выбери действие для видео.")
-                            
-                            # Показываем кнопки с действиями
-                            keyboard = get_action_keyboard(post_key)
-                            post_data = pending_posts[post_key]
-                            section_name = POST_TYPES.get(post_data.get('post_type'), 'Не выбран')
-                            media_count = len(post_data.get('media_file_ids', []))
-                            
-                            new_text = f"🎬 Видео с обложкой\n\n"
-                            new_text += f"✅ Выбран раздел: {section_name}\n\n"
-                            new_text += f"Заголовок: {post_data.get('title', 'Без заголовка')}\n\n"
-                            new_text += f"Текст: {post_data.get('content', '')[:300]}...\n\n"
-                            new_text += f"Медиа: видео + фото обложки\n\n"
-                            new_text += "Выбери действие:"
-                            
-                            tg_send_message(chat_id, new_text, json.dumps(keyboard))
+                            if msg_id:
+                                new_text = f"✅ Фото для обложки получено!\n\n"
+                                new_text += f"🎬 Видео с обложкой\n\n"
+                                new_text += f"📂 Раздел: {POST_TYPES.get(pending_posts[post_key].get('post_type'), 'Выберите раздел')}\n\n"
+                                new_text += f"Заголовок: {pending_posts[post_key].get('title', 'Без заголовка')}\n\n"
+                                new_text += f"Текст: {pending_posts[post_key].get('content', '')[:200]}...\n\n"
+                                new_text += "Теперь выбери действие:"
+                                
+                                # Показываем кнопки с действиями
+                                keyboard = get_action_keyboard(post_key)
+                                tg_edit_message_text(chat_id, msg_id, new_text, json.dumps(keyboard))
+                            else:
+                                # Если msg_id нет, отправляем новое сообщение
+                                keyboard = get_action_keyboard(post_key)
+                                post_data = pending_posts[post_key]
+                                section_name = POST_TYPES.get(post_data.get('post_type'), 'Не выбран')
+                                
+                                new_text = f"✅ Фото для обложки получено!\n\n"
+                                new_text += f"🎬 Видео с обложкой\n\n"
+                                new_text += f"✅ Выбран раздел: {section_name}\n\n"
+                                new_text += f"Заголовок: {post_data.get('title', 'Без заголовка')}\n\n"
+                                new_text += f"Текст: {post_data.get('content', '')[:200]}...\n\n"
+                                new_text += "Выбери действие:"
+                                
+                                tg_send_message(chat_id, new_text, json.dumps(keyboard))
                             
                             # Удаляем из ожидания
                             del video_pending[video_key]
                         else:
                             tg_send_message(chat_id, "❌ Пост не найден. Попробуйте отправить видео заново.")
-                            del video_pending[video_key]
+                            if video_key in video_pending:
+                                del video_pending[video_key]
                     return
                 else:
                     # Обычное одиночное фото
@@ -810,7 +858,7 @@ def process_update(update_json):
                 is_video = True
                 logger.info("🎬 Обнаружено ВИДЕО")
                 
-                # Если есть текст - обрабатываем как обычно, но запрашиваем фото для обложки
+                # Если есть текст - обрабатываем
                 if text:
                     title, content = extract_title_and_content(text)
                     formatted_content = format_content_for_wp(content, None, None)
@@ -826,20 +874,15 @@ def process_update(update_json):
                         'thumbnail_id': None  # Будет заполнено после получения фото
                     }
                     
-                    # Запрашиваем фото для обложки
-                    video_pending[post_key] = {
-                        'post_key': post_key,
-                        'chat_id': chat_id,
-                        'video_file_id': video_file_id
-                    }
-                    
+                    # Сначала запрашиваем раздел
+                    keyboard = get_post_type_keyboard(post_key)
                     tg_send_message(
                         chat_id,
                         f"🎬 Видео получено!\n\n"
-                        f"📸 Отправь фото для заглавной (обложки) этого видео.\n\n"
-                        f"Это фото будет использовано как превью для поста.\n\n"
                         f"Заголовок: {title}\n\n"
-                        f"Текст: {content[:200]}..."
+                        f"Текст: {content[:300]}...\n\n"
+                        f"📂 Сначала выбери раздел для публикации:",
+                        json.dumps(keyboard)
                     )
                     return
                 else:
@@ -854,7 +897,7 @@ def process_update(update_json):
             if not text and not media_file_ids:
                 return
             
-            # Если нет текста, но есть медиа
+            # Если нет текста, но есть медиа (не видео)
             if not text and media_file_ids and not has_video:
                 tg_send_message(chat_id, "❌ Отправьте текст новости.\nПервая строка будет заголовком.")
                 return
@@ -875,11 +918,7 @@ def process_update(update_json):
                 }
                 
                 # Клавиатура с выбором категории
-                keyboard = {
-                    "inline_keyboard": []
-                }
-                for pt_key, pt_name in POST_TYPES.items():
-                    keyboard["inline_keyboard"].append([{"text": pt_name, "callback_data": f"select_post_type|{post_key}|{pt_key}"}])
+                keyboard = get_post_type_keyboard(post_key)
                 
                 media_count = len(media_file_ids)
                 media_type = "видео" if is_video else f"{media_count} фото" if media_count > 0 else "нет"
