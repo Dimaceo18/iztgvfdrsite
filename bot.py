@@ -620,16 +620,26 @@ def process_update(update_json):
                 is_video = post_data.get('is_video', False)
                 thumbnail_id = post_data.get('thumbnail_id')  # ID фото для обложки
                 
-                if post_data.get('media_file_ids'):
-                    for idx, file_id in enumerate(post_data['media_file_ids']):
-                        logger.info(f"📸 Загрузка медиа {idx + 1}/{len(post_data['media_file_ids'])}")
-                        media_id, media_url = download_and_upload_media(file_id, is_video)
+                # Создаем список всех file_id для загрузки
+                all_file_ids = post_data.get('media_file_ids', []).copy()
+                
+                # Если есть thumbnail_id и его нет в media_file_ids - добавляем
+                if thumbnail_id and thumbnail_id not in all_file_ids:
+                    all_file_ids.append(thumbnail_id)
+                    logger.info(f"📸 Добавляем фото обложки в список загрузки")
+                
+                if all_file_ids:
+                    for idx, file_id in enumerate(all_file_ids):
+                        # Определяем, является ли файл видео (только первый файл может быть видео)
+                        is_video_file = is_video and idx == 0
+                        logger.info(f"📸 Загрузка медиа {idx + 1}/{len(all_file_ids)} (видео: {is_video_file})")
+                        media_id, media_url = download_and_upload_media(file_id, is_video_file)
                         
                         if media_id:
                             media_ids.append(media_id)
-                            if is_video and idx == 0:
+                            if is_video_file:
                                 video_url = media_url
-                            elif not is_video:
+                            else:
                                 gallery_ids.append(media_id)
                             logger.info(f"✅ Медиа {idx + 1} загружено успешно")
                         else:
@@ -640,7 +650,9 @@ def process_update(update_json):
                     else:
                         logger.error("❌ Медиа НЕ загрузились!")
                 
+                # Определяем media_id для видео (первый файл)
                 media_id = media_ids[0] if media_ids and is_video else None
+                # Для фото используем первый файл как обложку
                 if not is_video and media_ids:
                     media_id = media_ids[0]
                 
@@ -654,7 +666,7 @@ def process_update(update_json):
                     is_video,
                     gallery_ids if not is_video and len(gallery_ids) > 1 else None,
                     None,
-                    thumbnail_id
+                    thumbnail_id if thumbnail_id else None
                 )
                 
                 if success:
@@ -690,16 +702,25 @@ def process_update(update_json):
                 is_video = post_data.get('is_video', False)
                 thumbnail_id = post_data.get('thumbnail_id')
                 
-                if post_data.get('media_file_ids'):
-                    for idx, file_id in enumerate(post_data['media_file_ids']):
-                        logger.info(f"📸 Загрузка медиа {idx + 1}/{len(post_data['media_file_ids'])}")
-                        media_id, media_url = download_and_upload_media(file_id, is_video)
+                # Создаем список всех file_id для загрузки
+                all_file_ids = post_data.get('media_file_ids', []).copy()
+                
+                # Если есть thumbnail_id и его нет в media_file_ids - добавляем
+                if thumbnail_id and thumbnail_id not in all_file_ids:
+                    all_file_ids.append(thumbnail_id)
+                    logger.info(f"📸 Добавляем фото обложки в список загрузки")
+                
+                if all_file_ids:
+                    for idx, file_id in enumerate(all_file_ids):
+                        is_video_file = is_video and idx == 0
+                        logger.info(f"📸 Загрузка медиа {idx + 1}/{len(all_file_ids)}")
+                        media_id, media_url = download_and_upload_media(file_id, is_video_file)
                         
                         if media_id:
                             media_ids.append(media_id)
-                            if is_video and idx == 0:
+                            if is_video_file:
                                 video_url = media_url
-                            elif not is_video:
+                            else:
                                 gallery_ids.append(media_id)
                             logger.info(f"✅ Медиа {idx + 1} загружено успешно")
                         else:
@@ -719,7 +740,7 @@ def process_update(update_json):
                     is_video,
                     gallery_ids if not is_video and len(gallery_ids) > 1 else None,
                     None,
-                    thumbnail_id
+                    thumbnail_id if thumbnail_id else None
                 )
                 
                 if success:
@@ -803,35 +824,26 @@ def process_update(update_json):
                         
                         if post_key in pending_posts:
                             pending_posts[post_key]['thumbnail_id'] = file_id
-                            # Добавляем фото в медиа файлы (для галереи, если нужно)
-                            # Но не добавляем в media_file_ids, чтобы не дублировать
+                            # Добавляем фото в media_file_ids для загрузки
+                            if file_id not in pending_posts[post_key]['media_file_ids']:
+                                pending_posts[post_key]['media_file_ids'].append(file_id)
                             logger.info(f"📸 Получено фото для обложки к видео, post_key={post_key}")
                             
                             # Показываем сообщение об успехе и продолжаем обработку
+                            keyboard = get_action_keyboard(post_key)
+                            post_data = pending_posts[post_key]
+                            section_name = POST_TYPES.get(post_data.get('post_type'), 'Не выбран')
+                            
+                            new_text = f"✅ Фото для обложки получено!\n\n"
+                            new_text += f"🎬 Видео с обложкой\n\n"
+                            new_text += f"✅ Выбран раздел: {section_name}\n\n"
+                            new_text += f"Заголовок: {post_data.get('title', 'Без заголовка')}\n\n"
+                            new_text += f"Текст: {post_data.get('content', '')[:200]}...\n\n"
+                            new_text += "Выбери действие:"
+                            
                             if msg_id:
-                                new_text = f"✅ Фото для обложки получено!\n\n"
-                                new_text += f"🎬 Видео с обложкой\n\n"
-                                new_text += f"📂 Раздел: {POST_TYPES.get(pending_posts[post_key].get('post_type'), 'Выберите раздел')}\n\n"
-                                new_text += f"Заголовок: {pending_posts[post_key].get('title', 'Без заголовка')}\n\n"
-                                new_text += f"Текст: {pending_posts[post_key].get('content', '')[:200]}...\n\n"
-                                new_text += "Теперь выбери действие:"
-                                
-                                # Показываем кнопки с действиями
-                                keyboard = get_action_keyboard(post_key)
                                 tg_edit_message_text(chat_id, msg_id, new_text, json.dumps(keyboard))
                             else:
-                                # Если msg_id нет, отправляем новое сообщение
-                                keyboard = get_action_keyboard(post_key)
-                                post_data = pending_posts[post_key]
-                                section_name = POST_TYPES.get(post_data.get('post_type'), 'Не выбран')
-                                
-                                new_text = f"✅ Фото для обложки получено!\n\n"
-                                new_text += f"🎬 Видео с обложкой\n\n"
-                                new_text += f"✅ Выбран раздел: {section_name}\n\n"
-                                new_text += f"Заголовок: {post_data.get('title', 'Без заголовка')}\n\n"
-                                new_text += f"Текст: {post_data.get('content', '')[:200]}...\n\n"
-                                new_text += "Выбери действие:"
-                                
                                 tg_send_message(chat_id, new_text, json.dumps(keyboard))
                             
                             # Удаляем из ожидания
