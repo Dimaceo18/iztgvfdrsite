@@ -50,7 +50,6 @@ media_groups = defaultdict(dict)
 group_timers = {}
 scheduled_posts = {}
 scheduled_timers = {}
-# Хранилище для ожидания фото к видео
 video_pending = {}
 
 # Базовый URL для Telegram API
@@ -148,6 +147,7 @@ def format_content_for_wp(text, video_url=None, gallery_ids=None):
             if i == 0:
                 if video_url:
                     formatted.append(f'[video width="100%" height="auto" mp4="{video_url}"]')
+                    logger.info(f"🎬 Видео вставлено в контент: {video_url}")
                 elif gallery_ids and len(gallery_ids) > 0:
                     gallery_shortcode = '[gallery ids="' + ','.join(str(id) for id in gallery_ids) + '" size="full" columns="1"]'
                     formatted.append(gallery_shortcode)
@@ -251,7 +251,7 @@ def download_and_upload_media(file_id, is_video=False):
         logger.error(f"❌ Ошибка загрузки медиа: {e}")
         return None, None
 
-def create_wp_post(title, content, post_type, media_id=None, video_url=None, publish=False, is_video=False, gallery_ids=None, schedule_time=None, thumbnail_id=None):
+def create_wp_post(title, content, post_type, media_id=None, video_url=None, publish=False, is_video=False, gallery_ids=None, schedule_time=None, thumbnail_wp_id=None):
     """Создание поста в WordPress с видео или галереей в контенте и SEO (Yoast)"""
     status = 'future' if schedule_time else ('publish' if publish else 'draft')
     
@@ -290,11 +290,11 @@ def create_wp_post(title, content, post_type, media_id=None, video_url=None, pub
         post_data['date'] = schedule_time.isoformat()
         logger.info(f"⏰ Запланирована публикация на {schedule_time.strftime('%d.%m.%Y %H:%M')}")
     
-    # Устанавливаем обложку (приоритет у thumbnail_id, затем у media_id)
-    if thumbnail_id:
-        post_data['featured_media'] = thumbnail_id
-        logger.info(f"📎 Устанавливаю фото обложки WP ID={thumbnail_id}")
-    elif media_id:
+    # Устанавливаем обложку (используем thumbnail_wp_id)
+    if thumbnail_wp_id:
+        post_data['featured_media'] = thumbnail_wp_id
+        logger.info(f"📎 Устанавливаю фото обложки WP ID={thumbnail_wp_id}")
+    elif media_id and not video_url:
         post_data['featured_media'] = media_id
         logger.info(f"📎 Устанавливаю медиа WP ID={media_id} как обложку")
     
@@ -338,41 +338,45 @@ def publish_scheduled_post(post_key):
     logger.info(f"⏰ Время публикации для поста {post_key}!")
     
     try:
-        # Загружаем все медиа
+        # Получаем данные
+        is_video = post_data.get('is_video', False)
+        thumbnail_wp_id = post_data.get('thumbnail_wp_id')
+        video_file_id = post_data.get('video_file_id')  # Сохраняем file_id видео
+        media_file_ids = post_data.get('media_file_ids', [])
+        
+        video_url = None
         media_ids = []
         gallery_ids = []
-        video_url = None
-        is_video = post_data.get('is_video', False)
-        thumbnail_wp_id = post_data.get('thumbnail_wp_id')  # WP ID фото для обложки
         
-        if post_data.get('media_file_ids'):
-            for idx, file_id in enumerate(post_data['media_file_ids']):
-                logger.info(f"📸 Загрузка медиа {idx + 1}/{len(post_data['media_file_ids'])}")
-                media_id, media_url = download_and_upload_media(file_id, is_video)
-                
+        # Загружаем видео
+        if is_video and video_file_id:
+            logger.info(f"🎬 Загрузка видео...")
+            media_id, video_url = download_and_upload_media(video_file_id, True)
+            if media_id:
+                media_ids.append(media_id)
+                logger.info(f"✅ Видео загружено, URL={video_url}")
+            else:
+                logger.error("❌ Не удалось загрузить видео")
+        
+        # Загружаем остальные медиа (фото)
+        for file_id in media_file_ids:
+            if file_id != video_file_id:  # Пропускаем видео, если уже загрузили
+                logger.info(f"📸 Загрузка фото...")
+                media_id, _ = download_and_upload_media(file_id, False)
                 if media_id:
                     media_ids.append(media_id)
-                    if is_video and idx == 0:
-                        video_url = media_url
-                    elif not is_video:
-                        gallery_ids.append(media_id)
-                    logger.info(f"✅ Медиа {idx + 1} загружено успешно")
-                else:
-                    logger.warning(f"⚠️ Не удалось загрузить медиа {idx + 1}")
-        
-        media_id = media_ids[0] if media_ids and is_video else None
-        if not is_video and media_ids:
-            media_id = media_ids[0]
+                    gallery_ids.append(media_id)
+                    logger.info(f"✅ Фото загружено, ID={media_id}")
         
         success, link = create_wp_post(
             post_data['title'],
             post_data['content'],
             post_data['post_type'],
-            media_id,
-            video_url,
+            None,  # media_id не нужен
+            video_url,  # Передаем URL видео
             True,
             is_video,
-            gallery_ids if not is_video and len(gallery_ids) > 1 else None,
+            gallery_ids if gallery_ids else None,
             None,
             thumbnail_wp_id
         )
@@ -429,7 +433,7 @@ def process_media_group(media_group_id):
         'title': title,
         'content': formatted_content,
         'media_uploaded': [],
-        'thumbnail_wp_id': None  # WP ID обложки
+        'thumbnail_wp_id': None
     }
     
     # Клавиатура с выбором категории
@@ -551,7 +555,8 @@ def process_update(update_json):
                     'is_video': post_data.get('is_video', False),
                     'chat_id': chat_id,
                     'msg_id': msg_id,
-                    'thumbnail_wp_id': post_data.get('thumbnail_wp_id')
+                    'thumbnail_wp_id': post_data.get('thumbnail_wp_id'),
+                    'video_file_id': post_data.get('video_file_id')  # Сохраняем file_id видео
                 }
                 
                 # Запускаем таймер
@@ -615,60 +620,51 @@ def process_update(update_json):
                 
                 tg_edit_message_text(chat_id, msg_id, "⏳ Публикую на сайт...")
                 
-                # Загружаем все медиа
-                media_ids = []
-                gallery_ids = []
-                video_url = None
+                # Получаем данные
                 is_video = post_data.get('is_video', False)
-                thumbnail_wp_id = post_data.get('thumbnail_wp_id')  # WP ID фото для обложки
+                thumbnail_wp_id = post_data.get('thumbnail_wp_id')
+                video_file_id = post_data.get('video_file_id')  # file_id видео
+                media_file_ids = post_data.get('media_file_ids', [])
                 
-                # Создаем список всех file_id для загрузки
-                all_file_ids = post_data.get('media_file_ids', []).copy()
+                video_url = None
+                gallery_ids = []
+                media_ids = []
                 
-                # Загружаем все медиа
-                if all_file_ids:
-                    for idx, file_id in enumerate(all_file_ids):
-                        # Определяем, является ли файл видео (только первый файл может быть видео)
-                        is_video_file = is_video and idx == 0
-                        logger.info(f"📸 Загрузка медиа {idx + 1}/{len(all_file_ids)} (видео: {is_video_file})")
-                        media_id, media_url = download_and_upload_media(file_id, is_video_file)
-                        
+                # Загружаем видео
+                if is_video and video_file_id:
+                    logger.info(f"🎬 Загрузка видео...")
+                    media_id, video_url = download_and_upload_media(video_file_id, True)
+                    if media_id:
+                        media_ids.append(media_id)
+                        logger.info(f"✅ Видео загружено, URL={video_url}")
+                    else:
+                        logger.error("❌ Не удалось загрузить видео")
+                        tg_edit_message_text(chat_id, msg_id, "❌ Ошибка загрузки видео")
+                        return
+                
+                # Загружаем остальные медиа (фото)
+                for file_id in media_file_ids:
+                    if file_id != video_file_id:  # Пропускаем видео, если уже загрузили
+                        logger.info(f"📸 Загрузка фото...")
+                        media_id, _ = download_and_upload_media(file_id, False)
                         if media_id:
                             media_ids.append(media_id)
-                            if is_video_file:
-                                video_url = media_url
-                            else:
-                                gallery_ids.append(media_id)
-                            logger.info(f"✅ Медиа {idx + 1} загружено успешно")
+                            gallery_ids.append(media_id)
+                            logger.info(f"✅ Фото загружено, ID={media_id}")
                         else:
-                            logger.warning(f"⚠️ Не удалось загрузить медиа {idx + 1}")
-                    
-                    if media_ids:
-                        logger.info(f"✅ Загружено {len(media_ids)} медиа")
-                    else:
-                        logger.error("❌ Медиа НЕ загрузились!")
-                
-                # Определяем media_id для видео (первый файл)
-                media_id = media_ids[0] if media_ids and is_video else None
-                # Для фото используем первый файл как обложку
-                if not is_video and media_ids:
-                    media_id = media_ids[0]
-                
-                # Если есть thumbnail_wp_id - используем его как обложку
-                # Иначе используем media_id
-                final_thumbnail_id = thumbnail_wp_id if thumbnail_wp_id else None
+                            logger.warning(f"⚠️ Не удалось загрузить фото")
                 
                 success, link = create_wp_post(
                     post_data['title'],
                     post_data['content'],
                     post_data['post_type'],
-                    media_id,
-                    video_url,
+                    None,  # media_id не нужен
+                    video_url,  # Передаем URL видео
                     True,
                     is_video,
-                    gallery_ids if not is_video and len(gallery_ids) > 1 else None,
+                    gallery_ids if gallery_ids else None,
                     None,
-                    final_thumbnail_id
+                    thumbnail_wp_id
                 )
                 
                 if success:
@@ -697,50 +693,49 @@ def process_update(update_json):
                 
                 tg_edit_message_text(chat_id, msg_id, "⏳ Сохраняю в черновики...")
                 
-                # Загружаем все медиа
-                media_ids = []
-                gallery_ids = []
-                video_url = None
+                # Получаем данные
                 is_video = post_data.get('is_video', False)
                 thumbnail_wp_id = post_data.get('thumbnail_wp_id')
+                video_file_id = post_data.get('video_file_id')
+                media_file_ids = post_data.get('media_file_ids', [])
                 
-                # Создаем список всех file_id для загрузки
-                all_file_ids = post_data.get('media_file_ids', []).copy()
+                video_url = None
+                gallery_ids = []
+                media_ids = []
                 
-                # Загружаем все медиа
-                if all_file_ids:
-                    for idx, file_id in enumerate(all_file_ids):
-                        is_video_file = is_video and idx == 0
-                        logger.info(f"📸 Загрузка медиа {idx + 1}/{len(all_file_ids)}")
-                        media_id, media_url = download_and_upload_media(file_id, is_video_file)
-                        
+                # Загружаем видео
+                if is_video and video_file_id:
+                    logger.info(f"🎬 Загрузка видео...")
+                    media_id, video_url = download_and_upload_media(video_file_id, True)
+                    if media_id:
+                        media_ids.append(media_id)
+                        logger.info(f"✅ Видео загружено, URL={video_url}")
+                    else:
+                        logger.error("❌ Не удалось загрузить видео")
+                        tg_edit_message_text(chat_id, msg_id, "❌ Ошибка загрузки видео")
+                        return
+                
+                # Загружаем остальные медиа (фото)
+                for file_id in media_file_ids:
+                    if file_id != video_file_id:
+                        logger.info(f"📸 Загрузка фото...")
+                        media_id, _ = download_and_upload_media(file_id, False)
                         if media_id:
                             media_ids.append(media_id)
-                            if is_video_file:
-                                video_url = media_url
-                            else:
-                                gallery_ids.append(media_id)
-                            logger.info(f"✅ Медиа {idx + 1} загружено успешно")
-                        else:
-                            logger.warning(f"⚠️ Не удалось загрузить медиа {idx + 1}")
-                
-                media_id = media_ids[0] if media_ids and is_video else None
-                if not is_video and media_ids:
-                    media_id = media_ids[0]
-                
-                final_thumbnail_id = thumbnail_wp_id if thumbnail_wp_id else None
+                            gallery_ids.append(media_id)
+                            logger.info(f"✅ Фото загружено, ID={media_id}")
                 
                 success, link = create_wp_post(
                     post_data['title'],
                     post_data['content'],
                     post_data['post_type'],
-                    media_id,
+                    None,
                     video_url,
                     False,
                     is_video,
-                    gallery_ids if not is_video and len(gallery_ids) > 1 else None,
+                    gallery_ids if gallery_ids else None,
                     None,
-                    final_thumbnail_id
+                    thumbnail_wp_id
                 )
                 
                 if success:
@@ -829,7 +824,7 @@ def process_update(update_json):
                             
                             if post_key in pending_posts:
                                 pending_posts[post_key]['thumbnail_wp_id'] = thumbnail_wp_id
-                                # Добавляем фото в media_file_ids для загрузки (если нужно показать в галерее)
+                                # Добавляем фото в media_file_ids для загрузки
                                 if file_id not in pending_posts[post_key]['media_file_ids']:
                                     pending_posts[post_key]['media_file_ids'].append(file_id)
                                 logger.info(f"📸 Получено фото для обложки к видео, WP ID={thumbnail_wp_id}, post_key={post_key}")
@@ -890,7 +885,8 @@ def process_update(update_json):
                         'title': title,
                         'content': formatted_content,
                         'media_uploaded': [],
-                        'thumbnail_wp_id': None  # Будет заполнено после получения фото
+                        'thumbnail_wp_id': None,
+                        'video_file_id': video_file_id  # Сохраняем file_id видео отдельно!
                     }
                     
                     # Сначала запрашиваем раздел
