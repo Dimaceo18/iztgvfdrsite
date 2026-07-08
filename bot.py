@@ -9,6 +9,9 @@ from dotenv import load_dotenv
 from collections import defaultdict
 import threading
 from datetime import datetime, timedelta
+from PIL import Image, ImageEnhance, ImageFilter
+import io
+import random
 
 load_dotenv()
 
@@ -58,6 +61,126 @@ TG_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 DEEPSEEK_PROMPT = """Ты редактор новостного сайта. Перепиши новость в строгом городском формате, объемом около 650 символов. Убери лишнюю воду, сделай интересный заголовок, никаких смайликов. Не используй символы # и ** в ответе. Сохрани главные факты. Расставь абзацы.
 
 ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст."""
+
+def unique_image(image_bytes, is_video_thumbnail=False):
+    """
+    Уникализация изображения с помощью различных преобразований
+    
+    Args:
+        image_bytes: исходное изображение в байтах
+        is_video_thumbnail: флаг, что это обложка для видео (применяем более мягкие изменения)
+    
+    Returns:
+        уникализированное изображение в байтах
+    """
+    try:
+        # Открываем изображение
+        image = Image.open(io.BytesIO(image_bytes))
+        
+        # Конвертируем в RGB если нужно
+        if image.mode in ('RGBA', 'LA', 'P'):
+            image = image.convert('RGB')
+        
+        # Случайный выбор метода уникализации
+        method = random.choice([
+            'resize_sharpen',  # Изменение размера + резкость
+            'color_adjust',    # Коррекция цвета
+            'rotate_crop',     # Поворот + обрезка
+            'filter_sharpen',  # Фильтры + резкость
+            'contrast_brightness'  # Контраст + яркость
+        ])
+        
+        # Для обложек видео используем более мягкие изменения
+        if is_video_thumbnail:
+            method = random.choice([
+                'resize_sharpen',
+                'contrast_brightness',
+                'color_adjust'
+            ])
+        
+        logger.info(f"🔄 Уникализация фото методом: {method}")
+        
+        # Получаем размеры
+        width, height = image.size
+        
+        if method == 'resize_sharpen':
+            # Немного меняем размер (не более чем на 5%)
+            scale = random.uniform(0.95, 1.05)
+            new_width = int(width * scale)
+            new_height = int(height * scale)
+            image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            
+            # Добавляем небольшую резкость
+            enhancer = ImageEnhance.Sharpness(image)
+            image = enhancer.enhance(random.uniform(1.1, 1.3))
+            
+            # Возвращаем к исходному размеру для единообразия
+            image = image.resize((width, height), Image.Resampling.LANCZOS)
+        
+        elif method == 'color_adjust':
+            # Корректируем цвета
+            enhancer = ImageEnhance.Color(image)
+            image = enhancer.enhance(random.uniform(0.9, 1.1))
+            
+            # Немного меняем насыщенность
+            enhancer = ImageEnhance.Contrast(image)
+            image = enhancer.enhance(random.uniform(0.95, 1.05))
+            
+            enhancer = ImageEnhance.Brightness(image)
+            image = enhancer.enhance(random.uniform(0.97, 1.03))
+        
+        elif method == 'rotate_crop':
+            # Небольшой поворот (максимум 2 градуса)
+            angle = random.uniform(-2, 2)
+            image = image.rotate(angle, expand=False, fillcolor='white')
+            
+            # Небольшая обрезка краев (макс 2%)
+            crop_percent = random.uniform(0, 0.02)
+            crop_x = int(width * crop_percent)
+            crop_y = int(height * crop_percent)
+            if crop_x > 0 and crop_y > 0:
+                image = image.crop((crop_x, crop_y, width - crop_x, height - crop_y))
+                image = image.resize((width, height), Image.Resampling.LANCZOS)
+        
+        elif method == 'filter_sharpen':
+            # Применяем фильтр для легкого размытия
+            if random.random() < 0.3:
+                image = image.filter(ImageFilter.GaussianBlur(radius=0.3))
+            
+            # Затем усиливаем резкость
+            enhancer = ImageEnhance.Sharpness(image)
+            image = enhancer.enhance(random.uniform(1.2, 1.5))
+        
+        elif method == 'contrast_brightness':
+            # Меняем контраст и яркость
+            enhancer = ImageEnhance.Contrast(image)
+            image = enhancer.enhance(random.uniform(0.9, 1.1))
+            
+            enhancer = ImageEnhance.Brightness(image)
+            image = enhancer.enhance(random.uniform(0.95, 1.05))
+        
+        # Сохраняем в буфер
+        buffer = io.BytesIO()
+        
+        # Определяем формат и качество
+        format_type = 'JPEG' if image.mode == 'RGB' else 'PNG'
+        quality = random.randint(85, 95)  # Варьируем качество для уникализации
+        
+        if format_type == 'JPEG':
+            image.save(buffer, format=format_type, quality=quality, optimize=True)
+        else:
+            image.save(buffer, format=format_type, optimize=True)
+        
+        buffer.seek(0)
+        unique_bytes = buffer.getvalue()
+        
+        logger.info(f"✅ Фото уникализировано: {len(unique_bytes)} байт (было {len(image_bytes)})")
+        return unique_bytes
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка уникализации: {e}")
+        # В случае ошибки возвращаем оригинал
+        return image_bytes
 
 def get_action_keyboard(post_key):
     """Создает клавиатуру с действиями для поста"""
@@ -143,7 +266,6 @@ def format_content_for_wp(text, video_url=None, gallery_ids=None, is_video=False
             para = re.sub(r'\*(.+?)\*', r'<em>\1</em>', para)
             formatted.append(f'<p>{para}</p>')
             
-            # Вставляем медиа ПОСЛЕ ПЕРВОГО абзаца
             if i == 0:
                 if is_video and video_url:
                     formatted.append(f'[video width="100%" height="auto" mp4="{video_url}"]')
@@ -184,8 +306,8 @@ def process_text_with_deepseek(text):
         logger.error(f"Ошибка DeepSeek: {e}")
         return None
 
-def download_and_upload_media(file_id, is_video=False):
-    """Загрузка фото или видео в WordPress"""
+def download_and_upload_media(file_id, is_video=False, is_thumbnail=False):
+    """Загрузка фото или видео в WordPress с уникализацией фото"""
     try:
         media_type = "видео" if is_video else "фото"
         logger.info(f"📸 НАЧАЛО ЗАГРУЗКИ {media_type.upper()}: file_id={file_id}")
@@ -218,12 +340,20 @@ def download_and_upload_media(file_id, is_video=False):
             logger.error(f"❌ Ошибка скачивания {media_type}: {media_response.status_code}")
             return None, None
         
-        logger.info(f"✅ {media_type.capitalize()} скачано, размер: {len(media_response.content)} байт")
+        media_content = media_response.content
+        logger.info(f"✅ {media_type.capitalize()} скачано, размер: {len(media_content)} байт")
+        
+        # УНИКАЛИЗАЦИЯ ФОТО (не видео)
+        if not is_video:
+            # Для обложек видео используем более мягкую уникализацию
+            is_video_thumbnail = is_thumbnail
+            media_content = unique_image(media_content, is_video_thumbnail)
+            logger.info(f"✅ Фото уникализировано, новый размер: {len(media_content)} байт")
         
         ext = 'mp4' if is_video else 'jpg'
         mime = 'video/mp4' if is_video else 'image/jpeg'
         files = {
-            'file': (f'{media_type}_{int(time.time())}.{ext}', media_response.content, mime)
+            'file': (f'{media_type}_{int(time.time())}.{ext}', media_content, mime)
         }
         
         logger.info(f"📸 Загружаю {media_type} в WordPress...")
@@ -255,7 +385,6 @@ def create_wp_post(title, content, post_type, featured_media_id=None, video_url=
     """Создание поста в WordPress с видео или галереей в контенте и SEO (Yoast)"""
     status = 'future' if schedule_time else ('publish' if publish else 'draft')
     
-    # Форматируем контент с медиа
     final_content = content
     if is_video and video_url:
         final_content = format_content_for_wp(content, video_url, None, is_video=True)
@@ -264,7 +393,6 @@ def create_wp_post(title, content, post_type, featured_media_id=None, video_url=
         final_content = format_content_for_wp(content, None, gallery_ids, is_video=False)
         logger.info(f"🖼️ Галерея из {len(gallery_ids)} фото добавлена в контент")
     
-    # Генерируем SEO данные
     seo_title = title[:70]
     seo_description = re.sub(r'<[^>]+>', '', content)
     seo_description = re.sub(r'\[video[^\]]*\]', '', seo_description)
@@ -289,7 +417,6 @@ def create_wp_post(title, content, post_type, featured_media_id=None, video_url=
         post_data['date'] = schedule_time.isoformat()
         logger.info(f"⏰ Запланирована публикация на {schedule_time.strftime('%d.%m.%Y %H:%M')}")
     
-    # Устанавливаем обложку
     if featured_media_id:
         post_data['featured_media'] = featured_media_id
         logger.info(f"📎 Устанавливаю обложку WP ID={featured_media_id}")
@@ -334,8 +461,7 @@ def publish_scheduled_post(post_key):
         is_video = post_data.get('is_video', False)
         featured_media_id = post_data.get('featured_media_id')
         video_file_id = post_data.get('video_file_id')
-        # Для фото берем только те, которые не являются обложкой
-        all_file_ids = post_data.get('media_file_ids', [])
+        gallery_file_ids = post_data.get('gallery_file_ids', [])
         
         video_url = None
         gallery_ids = []
@@ -348,11 +474,10 @@ def publish_scheduled_post(post_key):
             else:
                 logger.error("❌ Не удалось загрузить видео")
         
-        # Загружаем фото для галереи (исключая обложку и видео)
-        for file_id in all_file_ids:
-            if file_id != video_file_id and file_id != featured_media_id:
+        for file_id in gallery_file_ids:
+            if file_id != featured_media_id:
                 logger.info(f"📸 Загрузка фото для галереи...")
-                media_id, _ = download_and_upload_media(file_id, False)
+                media_id, _ = download_and_upload_media(file_id, False, is_thumbnail=False)
                 if media_id:
                     gallery_ids.append(media_id)
                     logger.info(f"✅ Фото загружено, ID={media_id}")
@@ -409,17 +534,17 @@ def process_media_group(media_group_id):
     
     post_key = str(int(time.time() * 1000))
     
-    # Загружаем первое фото как обложку
+    # Загружаем первое фото как обложку (с уникализацией, мягкая)
     logger.info(f"📸 Загружаю первое фото как обложку...")
-    featured_media_id, _ = download_and_upload_media(media_file_ids[0], False)
+    featured_media_id, _ = download_and_upload_media(media_file_ids[0], False, is_thumbnail=False)
     
-    # Остальные фото для галереи
+    # Остальные фото для галереи (тоже уникализируем)
     gallery_file_ids = media_file_ids[1:] if len(media_file_ids) > 1 else []
     
     pending_posts[post_key] = {
         'original_text': text,
-        'media_file_ids': media_file_ids,  # Все фото
-        'gallery_file_ids': gallery_file_ids,  # Только для галереи
+        'media_file_ids': media_file_ids,
+        'gallery_file_ids': gallery_file_ids,
         'is_video': False,
         'title': title,
         'content': content,
@@ -468,7 +593,6 @@ def process_update(update_json):
                     post_data['post_type'] = post_type
                     section_name = POST_TYPES.get(post_type, post_type)
                     
-                    # Если это видео и нет обложки - запрашиваем фото
                     if post_data.get('is_video') and not post_data.get('featured_media_id'):
                         video_pending[post_key] = {
                             'post_key': post_key,
@@ -485,7 +609,6 @@ def process_update(update_json):
                         
                         tg_edit_message_text(chat_id, msg_id, new_text)
                     else:
-                        # Для обычных постов с фото и для видео с уже загруженной обложкой
                         keyboard = get_action_keyboard(post_key)
                         media_count = len(post_data.get('media_file_ids', []))
                         media_type = "видео" if post_data.get('is_video') else f"{media_count} фото" if media_count > 0 else "нет"
@@ -518,7 +641,7 @@ def process_update(update_json):
                     'title': post_data['title'],
                     'content': post_data['content'],
                     'post_type': post_data['post_type'],
-                    'media_file_ids': post_data.get('gallery_file_ids', []),  # Только для галереи
+                    'gallery_file_ids': post_data.get('gallery_file_ids', []),
                     'is_video': post_data.get('is_video', False),
                     'chat_id': chat_id,
                     'msg_id': msg_id,
@@ -587,13 +710,11 @@ def process_update(update_json):
                 is_video = post_data.get('is_video', False)
                 featured_media_id = post_data.get('featured_media_id')
                 video_file_id = post_data.get('video_file_id')
-                # Для галереи берем только те фото, которые не являются обложкой
                 gallery_file_ids = post_data.get('gallery_file_ids', [])
                 
                 video_url = None
                 gallery_ids = []
                 
-                # Загружаем видео если есть
                 if is_video and video_file_id:
                     logger.info(f"🎬 Загрузка видео...")
                     media_id, video_url = download_and_upload_media(video_file_id, True)
@@ -604,11 +725,10 @@ def process_update(update_json):
                         tg_edit_message_text(chat_id, msg_id, "❌ Ошибка загрузки видео")
                         return
                 
-                # Загружаем фото для галереи (только те, что не обложка)
                 for file_id in gallery_file_ids:
                     if file_id != featured_media_id:
                         logger.info(f"📸 Загрузка фото для галереи...")
-                        media_id, _ = download_and_upload_media(file_id, False)
+                        media_id, _ = download_and_upload_media(file_id, False, is_thumbnail=False)
                         if media_id:
                             gallery_ids.append(media_id)
                             logger.info(f"✅ Фото загружено, ID={media_id}")
@@ -671,7 +791,7 @@ def process_update(update_json):
                 for file_id in gallery_file_ids:
                     if file_id != featured_media_id:
                         logger.info(f"📸 Загрузка фото...")
-                        media_id, _ = download_and_upload_media(file_id, False)
+                        media_id, _ = download_and_upload_media(file_id, False, is_thumbnail=False)
                         if media_id:
                             gallery_ids.append(media_id)
                             logger.info(f"✅ Фото загружено, ID={media_id}")
@@ -747,7 +867,6 @@ def process_update(update_json):
             
             # Одиночное фото
             if has_photo and not media_group_id:
-                # Проверяем, ожидаем ли мы фото для видео
                 video_key = None
                 for key in list(video_pending.keys()):
                     if video_pending[key].get('chat_id') == chat_id:
@@ -755,13 +874,13 @@ def process_update(update_json):
                         break
                 
                 if video_key:
-                    # Это фото для обложки к видео
+                    # Это фото для обложки к видео - применяем мягкую уникализацию
                     photos = message['photo']
                     if photos and len(photos) > 0:
                         file_id = photos[-1]['file_id']
                         
-                        logger.info(f"📸 Загружаю фото обложки в WordPress...")
-                        featured_media_id, thumbnail_url = download_and_upload_media(file_id, False)
+                        logger.info(f"📸 Загружаю фото обложки в WordPress (с мягкой уникализацией)...")
+                        featured_media_id, thumbnail_url = download_and_upload_media(file_id, False, is_thumbnail=True)
                         
                         if featured_media_id:
                             pending_data = video_pending[video_key]
@@ -769,7 +888,6 @@ def process_update(update_json):
                             msg_id = pending_data.get('msg_id')
                             
                             if post_key in pending_posts:
-                                # Сохраняем ID обложки, НЕ добавляем в gallery_file_ids
                                 pending_posts[post_key]['featured_media_id'] = featured_media_id
                                 logger.info(f"📸 Получено фото для обложки, WP ID={featured_media_id}")
                                 
@@ -805,15 +923,15 @@ def process_update(update_json):
                         if text:
                             title, content = extract_title_and_content(text)
                             
-                            logger.info(f"📸 Загружаю фото как обложку...")
-                            featured_media_id, _ = download_and_upload_media(file_id, False)
+                            logger.info(f"📸 Загружаю фото как обложку (с уникализацией)...")
+                            featured_media_id, _ = download_and_upload_media(file_id, False, is_thumbnail=False)
                             
                             if featured_media_id:
                                 post_key = str(int(time.time() * 1000))
                                 pending_posts[post_key] = {
                                     'original_text': text,
                                     'media_file_ids': [file_id],
-                                    'gallery_file_ids': [],  # Нет фото для галереи
+                                    'gallery_file_ids': [],
                                     'is_video': False,
                                     'title': title,
                                     'content': content,
@@ -827,7 +945,7 @@ def process_update(update_json):
                                     f"📢 Пост получен!\n\n"
                                     f"Заголовок: {title}\n\n"
                                     f"Текст: {content[:300]}...\n\n"
-                                    f"📸 Фото загружено как обложка\n\n"
+                                    f"📸 Фото загружено как обложка (уникализировано)\n\n"
                                     f"📂 Выбери раздел для публикации:",
                                     json.dumps(keyboard)
                                 )
@@ -849,7 +967,7 @@ def process_update(update_json):
                     pending_posts[post_key] = {
                         'original_text': text,
                         'media_file_ids': [video_file_id],
-                        'gallery_file_ids': [],  # Нет фото для галереи
+                        'gallery_file_ids': [],
                         'is_video': True,
                         'title': title,
                         'content': content,
