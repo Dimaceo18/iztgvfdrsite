@@ -208,16 +208,18 @@ def set_media_metadata(media_id, title, alt_text=None):
         if len(title) > 150:
             title = title[:147] + "..."
         
+        # Для галереи убираем название, чтобы оно не отображалось
         meta_data = {
             'title': title,
             'alt_text': alt_text,
-            'caption': alt_text,
+            'caption': '',  # Пустая подпись - не отображается
             'description': f"Изображение к статье: {title}"
         }
         
         logger.info(f"📝 Устанавливаю метаданные для медиа ID={media_id}")
         logger.info(f"   Название: {title}")
         logger.info(f"   Alt-текст: {alt_text}")
+        logger.info(f"   Подпись: (пусто - не отображается)")
         
         response = wp_session.post(
             f"{WP_MEDIA_URL}/{media_id}",
@@ -326,9 +328,13 @@ def format_content_for_wp(text, video_url=None, gallery_ids=None, is_video=False
                     formatted.append(f'[video width="100%" height="auto" mp4="{video_url}"]')
                     logger.info(f"🎬 Видео вставлено в контент после 1-го абзаца: {video_url}")
                 elif gallery_ids and len(gallery_ids) > 0:
-                    gallery_shortcode = '[gallery ids="' + ','.join(str(id) for id in gallery_ids) + '" size="full" columns="1"]'
+                    # Добавляем параметры для отключения подписей и названий
+                    # size="full" - полный размер
+                    # columns="1" - одна колонка
+                    # link="none" - без ссылки на страницу вложения
+                    gallery_shortcode = '[gallery ids="' + ','.join(str(id) for id in gallery_ids) + '" size="full" columns="1" link="none"]'
                     formatted.append(gallery_shortcode)
-                    logger.info(f"🖼️ Добавлена галерея из {len(gallery_ids)} фото после 1-го абзаца")
+                    logger.info(f"🖼️ Добавлена галерея из {len(gallery_ids)} фото после 1-го абзаца (без подписей)")
     
     return '\n'.join(formatted)
 
@@ -464,30 +470,21 @@ def create_wp_post(title, content, post_type, featured_media_id=None, video_url=
     seo_title = title[:70]
     seo_description = generate_seo_description(title, content, post_type)
     
-    # Формируем мета-данные для Yoast SEO (поддерживаем все возможные форматы)
+    # Формируем мета-данные для Yoast SEO
     post_data = {
         'title': title,
         'content': final_content,
         'status': status,
         'type': post_type,
         'meta': {
-            # Основные ключи Yoast
             '_yoast_wpseo_title': seo_title,
             '_yoast_wpseo_metadesc': seo_description,
-            
-            # Альтернативные ключи для старых версий
             'yoast_wpseo_title': seo_title,
             'yoast_wpseo_metadesc': seo_description,
-            
-            # Ключи для Rank Math SEO (если используется)
             'rank_math_title': seo_title,
             'rank_math_description': seo_description,
-            
-            # Стандартное мета-описание WordPress
             '_wpseo_metadesc': seo_description,
             '_wpseo_title': seo_title,
-            
-            # Дополнительные мета-поля
             'description': seo_description,
             '_description': seo_description
         }
@@ -520,10 +517,9 @@ def create_wp_post(title, content, post_type, featured_media_id=None, video_url=
             logger.info(f"✅ Пост создан: {post_link}")
             logger.info(f"✅ SEO данные добавлены в Yoast")
             
-            # Дополнительная проверка: обновляем мета-данные отдельно, если нужно
+            # Дополнительное обновление мета-данных
             post_id = response.json()['id']
             try:
-                # Обновляем мета-данные через отдельный запрос
                 meta_update = {
                     'meta': {
                         '_yoast_wpseo_title': seo_title,
