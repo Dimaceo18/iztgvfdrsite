@@ -334,7 +334,8 @@ def publish_scheduled_post(post_key):
         is_video = post_data.get('is_video', False)
         featured_media_id = post_data.get('featured_media_id')
         video_file_id = post_data.get('video_file_id')
-        media_file_ids = post_data.get('media_file_ids', [])
+        # Для фото берем только те, которые не являются обложкой
+        all_file_ids = post_data.get('media_file_ids', [])
         
         video_url = None
         gallery_ids = []
@@ -347,9 +348,10 @@ def publish_scheduled_post(post_key):
             else:
                 logger.error("❌ Не удалось загрузить видео")
         
-        for file_id in media_file_ids:
-            if file_id != video_file_id:
-                logger.info(f"📸 Загрузка фото...")
+        # Загружаем фото для галереи (исключая обложку и видео)
+        for file_id in all_file_ids:
+            if file_id != video_file_id and file_id != featured_media_id:
+                logger.info(f"📸 Загрузка фото для галереи...")
                 media_id, _ = download_and_upload_media(file_id, False)
                 if media_id:
                     gallery_ids.append(media_id)
@@ -411,9 +413,13 @@ def process_media_group(media_group_id):
     logger.info(f"📸 Загружаю первое фото как обложку...")
     featured_media_id, _ = download_and_upload_media(media_file_ids[0], False)
     
+    # Остальные фото для галереи
+    gallery_file_ids = media_file_ids[1:] if len(media_file_ids) > 1 else []
+    
     pending_posts[post_key] = {
         'original_text': text,
-        'media_file_ids': media_file_ids,
+        'media_file_ids': media_file_ids,  # Все фото
+        'gallery_file_ids': gallery_file_ids,  # Только для галереи
         'is_video': False,
         'title': title,
         'content': content,
@@ -512,7 +518,7 @@ def process_update(update_json):
                     'title': post_data['title'],
                     'content': post_data['content'],
                     'post_type': post_data['post_type'],
-                    'media_file_ids': post_data['media_file_ids'],
+                    'media_file_ids': post_data.get('gallery_file_ids', []),  # Только для галереи
                     'is_video': post_data.get('is_video', False),
                     'chat_id': chat_id,
                     'msg_id': msg_id,
@@ -581,7 +587,8 @@ def process_update(update_json):
                 is_video = post_data.get('is_video', False)
                 featured_media_id = post_data.get('featured_media_id')
                 video_file_id = post_data.get('video_file_id')
-                media_file_ids = post_data.get('media_file_ids', [])
+                # Для галереи берем только те фото, которые не являются обложкой
+                gallery_file_ids = post_data.get('gallery_file_ids', [])
                 
                 video_url = None
                 gallery_ids = []
@@ -597,9 +604,9 @@ def process_update(update_json):
                         tg_edit_message_text(chat_id, msg_id, "❌ Ошибка загрузки видео")
                         return
                 
-                # Загружаем фото для галереи (если есть)
-                for file_id in media_file_ids:
-                    if file_id != video_file_id:
+                # Загружаем фото для галереи (только те, что не обложка)
+                for file_id in gallery_file_ids:
+                    if file_id != featured_media_id:
                         logger.info(f"📸 Загрузка фото для галереи...")
                         media_id, _ = download_and_upload_media(file_id, False)
                         if media_id:
@@ -646,7 +653,7 @@ def process_update(update_json):
                 is_video = post_data.get('is_video', False)
                 featured_media_id = post_data.get('featured_media_id')
                 video_file_id = post_data.get('video_file_id')
-                media_file_ids = post_data.get('media_file_ids', [])
+                gallery_file_ids = post_data.get('gallery_file_ids', [])
                 
                 video_url = None
                 gallery_ids = []
@@ -661,8 +668,8 @@ def process_update(update_json):
                         tg_edit_message_text(chat_id, msg_id, "❌ Ошибка загрузки видео")
                         return
                 
-                for file_id in media_file_ids:
-                    if file_id != video_file_id:
+                for file_id in gallery_file_ids:
+                    if file_id != featured_media_id:
                         logger.info(f"📸 Загрузка фото...")
                         media_id, _ = download_and_upload_media(file_id, False)
                         if media_id:
@@ -707,7 +714,7 @@ def process_update(update_json):
             has_photo = 'photo' in message
             has_video = 'video' in message
             
-            # Медиа-группа (альбом) - обрабатываем как в первоначальном варианте
+            # Медиа-группа (альбом)
             if media_group_id and has_photo:
                 photos = message['photo']
                 if photos and len(photos) > 0:
@@ -738,7 +745,7 @@ def process_update(update_json):
                     logger.info(f"⏳ Запущен таймер для группы {media_group_id} на 3 секунды")
                 return
             
-            # Одиночное фото - как в первоначальном варианте
+            # Одиночное фото
             if has_photo and not media_group_id:
                 # Проверяем, ожидаем ли мы фото для видео
                 video_key = None
@@ -762,6 +769,7 @@ def process_update(update_json):
                             msg_id = pending_data.get('msg_id')
                             
                             if post_key in pending_posts:
+                                # Сохраняем ID обложки, НЕ добавляем в gallery_file_ids
                                 pending_posts[post_key]['featured_media_id'] = featured_media_id
                                 logger.info(f"📸 Получено фото для обложки, WP ID={featured_media_id}")
                                 
@@ -789,7 +797,7 @@ def process_update(update_json):
                             tg_send_message(chat_id, "❌ Не удалось загрузить фото обложки.")
                     return
                 else:
-                    # Обычное одиночное фото - как в первоначальном варианте
+                    # Обычное одиночное фото
                     photos = message['photo']
                     if photos and len(photos) > 0:
                         file_id = photos[-1]['file_id']
@@ -797,7 +805,6 @@ def process_update(update_json):
                         if text:
                             title, content = extract_title_and_content(text)
                             
-                            # Загружаем фото как обложку
                             logger.info(f"📸 Загружаю фото как обложку...")
                             featured_media_id, _ = download_and_upload_media(file_id, False)
                             
@@ -806,6 +813,7 @@ def process_update(update_json):
                                 pending_posts[post_key] = {
                                     'original_text': text,
                                     'media_file_ids': [file_id],
+                                    'gallery_file_ids': [],  # Нет фото для галереи
                                     'is_video': False,
                                     'title': title,
                                     'content': content,
@@ -841,6 +849,7 @@ def process_update(update_json):
                     pending_posts[post_key] = {
                         'original_text': text,
                         'media_file_ids': [video_file_id],
+                        'gallery_file_ids': [],  # Нет фото для галереи
                         'is_video': True,
                         'title': title,
                         'content': content,
@@ -848,7 +857,6 @@ def process_update(update_json):
                         'video_file_id': video_file_id
                     }
                     
-                    # Сначала запрашиваем раздел
                     keyboard = get_post_type_keyboard(post_key)
                     tg_send_message(
                         chat_id,
