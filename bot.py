@@ -62,17 +62,78 @@ DEEPSEEK_PROMPT = """Ты редактор новостного сайта. Пе
 
 ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст."""
 
-def unique_image(image_bytes, is_video_thumbnail=False):
+def generate_seo_description(title, content, post_type=None):
     """
-    Уникализация изображения с помощью различных преобразований
+    Генерирует SEO-описание для Yoast на основе заголовка и контента
     
     Args:
-        image_bytes: исходное изображение в байтах
-        is_video_thumbnail: флаг, что это обложка для видео (применяем более мягкие изменения)
+        title: заголовок статьи
+        content: текст статьи
+        post_type: тип поста (для добавления контекста)
     
     Returns:
-        уникализированное изображение в байтах
+        строка с SEO-описанием (до 160 символов)
     """
+    try:
+        # Удаляем HTML-теги и шорткоды
+        clean_text = re.sub(r'<[^>]+>', '', content)
+        clean_text = re.sub(r'\[video[^\]]*\]', '', clean_text)
+        clean_text = re.sub(r'\[gallery[^\]]*\]', '', clean_text)
+        clean_text = re.sub(r'\[[^\]]*\]', '', clean_text)  # Удаляем все шорткоды
+        clean_text = re.sub(r'https?://[^\s]+', '', clean_text)  # Удаляем ссылки
+        
+        # Убираем лишние пробелы и переносы строк
+        clean_text = ' '.join(clean_text.split())
+        
+        # Берем первые 150-200 символов текста
+        if len(clean_text) > 200:
+            description = clean_text[:197] + "..."
+        elif len(clean_text) > 50:
+            description = clean_text
+        else:
+            # Если текст слишком короткий, генерируем из заголовка
+            description = f"Подробности в материале: {title}"
+        
+        # Добавляем ключевые слова из заголовка в начало описания
+        title_keywords = title.split()
+        if len(title_keywords) > 3:
+            # Берем первые 2-3 ключевых слова из заголовка
+            keywords = ' '.join(title_keywords[:3])
+            
+            # Если описание не начинается с ключевых слов, добавляем их
+            if not description.startswith(keywords):
+                description = f"{keywords}. {description}"
+        
+        # Добавляем контекст в зависимости от типа поста
+        context_map = {
+            "news": "Новости",
+            "auto": "Автомобильные новости",
+            "afisha": "Афиша и события",
+            "realt": "Недвижимость",
+            "sales": "Скидки и распродажи",
+            "sport": "Спортивные новости"
+        }
+        
+        if post_type and post_type in context_map:
+            context = context_map[post_type]
+            if len(description) + len(context) + 20 < 160:
+                # Добавляем контекст в конец описания
+                description = f"{description} Читайте в разделе {context}."
+        
+        # Обрезаем до 160 символов
+        if len(description) > 160:
+            description = description[:157] + "..."
+        
+        logger.info(f"✅ Сгенерировано SEO-описание: {description[:100]}...")
+        return description
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка генерации SEO-описания: {e}")
+        # Возвращаем простой вариант
+        return f"{title[:140]}..."
+
+def unique_image(image_bytes, is_video_thumbnail=False):
+    """Уникализация изображения"""
     try:
         image = Image.open(io.BytesIO(image_bytes))
         
@@ -149,7 +210,7 @@ def unique_image(image_bytes, is_video_thumbnail=False):
         buffer.seek(0)
         unique_bytes = buffer.getvalue()
         
-        logger.info(f"✅ Фото уникализировано: {len(unique_bytes)} байт (было {len(image_bytes)})")
+        logger.info(f"✅ Фото уникализировано: {len(unique_bytes)} байт")
         return unique_bytes
         
     except Exception as e:
@@ -159,21 +220,17 @@ def unique_image(image_bytes, is_video_thumbnail=False):
 def set_media_metadata(media_id, title, alt_text=None):
     """Установка метаданных для медиафайла в WordPress"""
     try:
-        # Генерируем alt-текст из заголовка, если не передан
         if alt_text is None:
             alt_text = title
         
-        # Очищаем от HTML-тегов
         alt_text = re.sub(r'<[^>]+>', '', alt_text)
         title = re.sub(r'<[^>]+>', '', title)
         
-        # Обрезаем до разумной длины
         if len(alt_text) > 150:
             alt_text = alt_text[:147] + "..."
         if len(title) > 150:
             title = title[:147] + "..."
         
-        # Данные для обновления
         meta_data = {
             'title': title,
             'alt_text': alt_text,
@@ -185,7 +242,6 @@ def set_media_metadata(media_id, title, alt_text=None):
         logger.info(f"   Название: {title}")
         logger.info(f"   Alt-текст: {alt_text}")
         
-        # Отправляем запрос на обновление медиа
         response = wp_session.post(
             f"{WP_MEDIA_URL}/{media_id}",
             auth=(WP_USERNAME, WP_PASSWORD),
@@ -198,7 +254,6 @@ def set_media_metadata(media_id, title, alt_text=None):
             return True
         else:
             logger.error(f"❌ Ошибка обновления метаданных: {response.status_code}")
-            logger.error(f"Ответ: {response.text[:200]}")
             return False
             
     except Exception as e:
@@ -377,10 +432,9 @@ def download_and_upload_media(file_id, is_video=False, is_thumbnail=False, title
         
         # Формируем имя файла с заголовком
         if title:
-            # Очищаем название от специальных символов
             clean_title = re.sub(r'[^\w\s-]', '', title)
             clean_title = re.sub(r'[-\s]+', '-', clean_title)
-            clean_title = clean_title[:100]  # Ограничиваем длину
+            clean_title = clean_title[:100]
             filename = f"{clean_title}_{int(time.time())}.{ext}"
         else:
             filename = f'{media_type}_{int(time.time())}.{ext}'
@@ -423,6 +477,7 @@ def create_wp_post(title, content, post_type, featured_media_id=None, video_url=
     """Создание поста в WordPress с видео или галереей в контенте и SEO (Yoast)"""
     status = 'future' if schedule_time else ('publish' if publish else 'draft')
     
+    # Форматируем контент с медиа
     final_content = content
     if is_video and video_url:
         final_content = format_content_for_wp(content, video_url, None, is_video=True)
@@ -431,14 +486,11 @@ def create_wp_post(title, content, post_type, featured_media_id=None, video_url=
         final_content = format_content_for_wp(content, None, gallery_ids, is_video=False)
         logger.info(f"🖼️ Галерея из {len(gallery_ids)} фото добавлена в контент")
     
+    # Генерируем SEO заголовок (для Yoast)
     seo_title = title[:70]
-    seo_description = re.sub(r'<[^>]+>', '', content)
-    seo_description = re.sub(r'\[video[^\]]*\]', '', seo_description)
-    seo_description = re.sub(r'\[gallery[^\]]*\]', '', seo_description)
-    seo_description = ' '.join(seo_description.split())
-    seo_description = seo_description[:160]
-    if len(seo_description) > 160:
-        seo_description = seo_description[:157] + "..."
+    
+    # Генерируем SEO описание (для Yoast) - улучшенная версия!
+    seo_description = generate_seo_description(title, content, post_type)
     
     post_data = {
         'title': title,
@@ -461,6 +513,8 @@ def create_wp_post(title, content, post_type, featured_media_id=None, video_url=
     
     try:
         logger.info(f"📤 Отправка в WordPress: раздел={post_type}, статус={status}")
+        logger.info(f"🔍 SEO Заголовок: {seo_title}")
+        logger.info(f"🔍 SEO Описание: {seo_description}")
         
         response = wp_session.post(
             f"{WP_API_URL}/{post_type}",
@@ -474,6 +528,7 @@ def create_wp_post(title, content, post_type, featured_media_id=None, video_url=
         if response.status_code == 201:
             post_link = response.json()['link']
             logger.info(f"✅ Пост создан: {post_link}")
+            logger.info(f"✅ SEO данные добавлены в Yoast")
             return True, post_link
         else:
             logger.error(f"❌ Ошибка: {response.status_code}")
@@ -651,10 +706,19 @@ def process_update(update_json):
                         keyboard = get_action_keyboard(post_key)
                         media_count = len(post_data.get('media_file_ids', []))
                         media_type = "видео" if post_data.get('is_video') else f"{media_count} фото" if media_count > 0 else "нет"
+                        
+                        # Показываем SEO информацию
+                        seo_desc = generate_seo_description(
+                            post_data.get('title', ''),
+                            post_data.get('content', ''),
+                            post_type
+                        )
+                        
                         new_text = f"✅ Выбран раздел: {section_name}\n\n"
                         new_text += f"Заголовок: {post_data.get('title', 'Без заголовка')}\n\n"
                         new_text += f"Текст: {post_data.get('content', '')[:300]}...\n\n"
                         new_text += f"Медиа: {media_type}\n\n"
+                        new_text += f"🔍 SEO-описание: {seo_desc}\n\n"
                         new_text += "Выбери действие:"
                         
                         tg_edit_message_text(chat_id, msg_id, new_text, json.dumps(keyboard))
@@ -723,9 +787,16 @@ def process_update(update_json):
                         
                         media_count = len(post_data.get('media_file_ids', []))
                         media_type = "видео" if post_data.get('is_video') else f"{media_count} фото" if media_count > 0 else "нет"
+                        
+                        seo_desc = generate_seo_description(
+                            title,
+                            content,
+                            post_data.get('post_type', 'news')
+                        )
+                        
                         tg_edit_message_text(
                             chat_id, msg_id,
-                            f"Заголовок: {title}\n\nТекст: {content}\n\nМедиа: {media_type}",
+                            f"Заголовок: {title}\n\nТекст: {content}\n\nМедиа: {media_type}\n\n🔍 SEO-описание: {seo_desc}",
                             json.dumps(keyboard)
                         )
                     else:
@@ -751,6 +822,8 @@ def process_update(update_json):
                 video_file_id = post_data.get('video_file_id')
                 gallery_file_ids = post_data.get('gallery_file_ids', [])
                 title = post_data.get('title', '')
+                post_type = post_data.get('post_type', 'news')
+                content = post_data.get('content', '')
                 
                 video_url = None
                 gallery_ids = []
@@ -774,9 +847,9 @@ def process_update(update_json):
                             logger.info(f"✅ Фото загружено, ID={media_id}")
                 
                 success, link = create_wp_post(
-                    post_data['title'],
-                    post_data['content'],
-                    post_data['post_type'],
+                    title,
+                    content,
+                    post_type,
                     featured_media_id,
                     video_url,
                     True,
@@ -815,6 +888,8 @@ def process_update(update_json):
                 video_file_id = post_data.get('video_file_id')
                 gallery_file_ids = post_data.get('gallery_file_ids', [])
                 title = post_data.get('title', '')
+                post_type = post_data.get('post_type', 'news')
+                content = post_data.get('content', '')
                 
                 video_url = None
                 gallery_ids = []
@@ -838,9 +913,9 @@ def process_update(update_json):
                             logger.info(f"✅ Фото загружено, ID={media_id}")
                 
                 success, link = create_wp_post(
-                    post_data['title'],
-                    post_data['content'],
-                    post_data['post_type'],
+                    title,
+                    content,
+                    post_type,
                     featured_media_id,
                     video_url,
                     False,
@@ -915,18 +990,16 @@ def process_update(update_json):
                         break
                 
                 if video_key:
-                    # Это фото для обложки к видео
                     photos = message['photo']
                     if photos and len(photos) > 0:
                         file_id = photos[-1]['file_id']
                         
-                        # Получаем заголовок из post_data
                         pending_data = video_pending[video_key]
                         post_key = pending_data['post_key']
                         post_data = pending_posts.get(post_key, {})
                         title = post_data.get('title', 'Видео')
                         
-                        logger.info(f"📸 Загружаю фото обложки в WordPress (с уникализацией и названием)...")
+                        logger.info(f"📸 Загружаю фото обложки в WordPress...")
                         featured_media_id, thumbnail_url = download_and_upload_media(
                             file_id, 
                             False, 
@@ -946,11 +1019,18 @@ def process_update(update_json):
                                 post_data = pending_posts[post_key]
                                 section_name = POST_TYPES.get(post_data.get('post_type'), 'Не выбран')
                                 
+                                seo_desc = generate_seo_description(
+                                    post_data.get('title', ''),
+                                    post_data.get('content', ''),
+                                    post_data.get('post_type', 'news')
+                                )
+                                
                                 new_text = f"✅ Фото для обложки получено!\n\n"
                                 new_text += f"🎬 Видео с обложкой\n\n"
                                 new_text += f"✅ Выбран раздел: {section_name}\n\n"
                                 new_text += f"Заголовок: {post_data.get('title', 'Без заголовка')}\n\n"
                                 new_text += f"Текст: {post_data.get('content', '')[:200]}...\n\n"
+                                new_text += f"🔍 SEO-описание: {seo_desc}\n\n"
                                 new_text += "Выбери действие:"
                                 
                                 if msg_id:
@@ -974,7 +1054,7 @@ def process_update(update_json):
                         if text:
                             title, content = extract_title_and_content(text)
                             
-                            logger.info(f"📸 Загружаю фото как обложку (с уникализацией и названием)...")
+                            logger.info(f"📸 Загружаю фото как обложку...")
                             featured_media_id, _ = download_and_upload_media(
                                 file_id, 
                                 False, 
@@ -1002,7 +1082,7 @@ def process_update(update_json):
                                     f"📢 Пост получен!\n\n"
                                     f"Заголовок: {title}\n\n"
                                     f"Текст: {content[:300]}...\n\n"
-                                    f"📸 Фото загружено как обложка с названием: {title}\n\n"
+                                    f"📸 Фото загружено как обложка\n\n"
                                     f"📂 Выбери раздел для публикации:",
                                     json.dumps(keyboard)
                                 )
