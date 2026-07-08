@@ -63,48 +63,28 @@ DEEPSEEK_PROMPT = """Ты редактор новостного сайта. Пе
 ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст."""
 
 def generate_seo_description(title, content, post_type=None):
-    """
-    Генерирует SEO-описание для Yoast на основе заголовка и контента
-    
-    Args:
-        title: заголовок статьи
-        content: текст статьи
-        post_type: тип поста (для добавления контекста)
-    
-    Returns:
-        строка с SEO-описанием (до 160 символов)
-    """
+    """Генерирует SEO-описание для Yoast"""
     try:
-        # Удаляем HTML-теги и шорткоды
         clean_text = re.sub(r'<[^>]+>', '', content)
         clean_text = re.sub(r'\[video[^\]]*\]', '', clean_text)
         clean_text = re.sub(r'\[gallery[^\]]*\]', '', clean_text)
-        clean_text = re.sub(r'\[[^\]]*\]', '', clean_text)  # Удаляем все шорткоды
-        clean_text = re.sub(r'https?://[^\s]+', '', clean_text)  # Удаляем ссылки
-        
-        # Убираем лишние пробелы и переносы строк
+        clean_text = re.sub(r'\[[^\]]*\]', '', clean_text)
+        clean_text = re.sub(r'https?://[^\s]+', '', clean_text)
         clean_text = ' '.join(clean_text.split())
         
-        # Берем первые 150-200 символов текста
         if len(clean_text) > 200:
             description = clean_text[:197] + "..."
         elif len(clean_text) > 50:
             description = clean_text
         else:
-            # Если текст слишком короткий, генерируем из заголовка
             description = f"Подробности в материале: {title}"
         
-        # Добавляем ключевые слова из заголовка в начало описания
         title_keywords = title.split()
-        if len(title_keywords) > 3:
-            # Берем первые 2-3 ключевых слова из заголовка
-            keywords = ' '.join(title_keywords[:3])
-            
-            # Если описание не начинается с ключевых слов, добавляем их
+        if len(title_keywords) > 2:
+            keywords = ' '.join(title_keywords[:2])
             if not description.startswith(keywords):
                 description = f"{keywords}. {description}"
         
-        # Добавляем контекст в зависимости от типа поста
         context_map = {
             "news": "Новости",
             "auto": "Автомобильные новости",
@@ -117,10 +97,8 @@ def generate_seo_description(title, content, post_type=None):
         if post_type and post_type in context_map:
             context = context_map[post_type]
             if len(description) + len(context) + 20 < 160:
-                # Добавляем контекст в конец описания
                 description = f"{description} Читайте в разделе {context}."
         
-        # Обрезаем до 160 символов
         if len(description) > 160:
             description = description[:157] + "..."
         
@@ -129,7 +107,6 @@ def generate_seo_description(title, content, post_type=None):
         
     except Exception as e:
         logger.error(f"❌ Ошибка генерации SEO-описания: {e}")
-        # Возвращаем простой вариант
         return f"{title[:140]}..."
 
 def unique_image(image_bytes, is_video_thumbnail=False):
@@ -421,7 +398,6 @@ def download_and_upload_media(file_id, is_video=False, is_thumbnail=False, title
         media_content = media_response.content
         logger.info(f"✅ {media_type.capitalize()} скачано, размер: {len(media_content)} байт")
         
-        # УНИКАЛИЗАЦИЯ ФОТО (не видео)
         if not is_video:
             is_video_thumbnail = is_thumbnail
             media_content = unique_image(media_content, is_video_thumbnail)
@@ -430,7 +406,6 @@ def download_and_upload_media(file_id, is_video=False, is_thumbnail=False, title
         ext = 'mp4' if is_video else 'jpg'
         mime = 'video/mp4' if is_video else 'image/jpeg'
         
-        # Формируем имя файла с заголовком
         if title:
             clean_title = re.sub(r'[^\w\s-]', '', title)
             clean_title = re.sub(r'[-\s]+', '-', clean_title)
@@ -459,7 +434,6 @@ def download_and_upload_media(file_id, is_video=False, is_thumbnail=False, title
             source_url = wp_response.json().get('source_url', 'unknown')
             logger.info(f"✅ {media_type.capitalize()} загружено! ID={media_id}, URL={source_url}")
             
-            # Устанавливаем метаданные для медиафайла
             if title:
                 set_media_metadata(media_id, title, alt_text)
             
@@ -486,20 +460,36 @@ def create_wp_post(title, content, post_type, featured_media_id=None, video_url=
         final_content = format_content_for_wp(content, None, gallery_ids, is_video=False)
         logger.info(f"🖼️ Галерея из {len(gallery_ids)} фото добавлена в контент")
     
-    # Генерируем SEO заголовок (для Yoast)
+    # Генерируем SEO данные
     seo_title = title[:70]
-    
-    # Генерируем SEO описание (для Yoast) - улучшенная версия!
     seo_description = generate_seo_description(title, content, post_type)
     
+    # Формируем мета-данные для Yoast SEO (поддерживаем все возможные форматы)
     post_data = {
         'title': title,
         'content': final_content,
         'status': status,
         'type': post_type,
         'meta': {
+            # Основные ключи Yoast
             '_yoast_wpseo_title': seo_title,
-            '_yoast_wpseo_metadesc': seo_description
+            '_yoast_wpseo_metadesc': seo_description,
+            
+            # Альтернативные ключи для старых версий
+            'yoast_wpseo_title': seo_title,
+            'yoast_wpseo_metadesc': seo_description,
+            
+            # Ключи для Rank Math SEO (если используется)
+            'rank_math_title': seo_title,
+            'rank_math_description': seo_description,
+            
+            # Стандартное мета-описание WordPress
+            '_wpseo_metadesc': seo_description,
+            '_wpseo_title': seo_title,
+            
+            # Дополнительные мета-поля
+            'description': seo_description,
+            '_description': seo_description
         }
     }
     
@@ -529,6 +519,30 @@ def create_wp_post(title, content, post_type, featured_media_id=None, video_url=
             post_link = response.json()['link']
             logger.info(f"✅ Пост создан: {post_link}")
             logger.info(f"✅ SEO данные добавлены в Yoast")
+            
+            # Дополнительная проверка: обновляем мета-данные отдельно, если нужно
+            post_id = response.json()['id']
+            try:
+                # Обновляем мета-данные через отдельный запрос
+                meta_update = {
+                    'meta': {
+                        '_yoast_wpseo_title': seo_title,
+                        '_yoast_wpseo_metadesc': seo_description
+                    }
+                }
+                update_response = wp_session.post(
+                    f"{WP_API_URL}/{post_type}/{post_id}",
+                    auth=(WP_USERNAME, WP_PASSWORD),
+                    json=meta_update,
+                    timeout=30
+                )
+                if update_response.status_code == 200:
+                    logger.info(f"✅ Мета-данные обновлены через дополнительный запрос")
+                else:
+                    logger.warning(f"⚠️ Не удалось обновить мета-данные: {update_response.status_code}")
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка обновления мета-данных: {e}")
+            
             return True, post_link
         else:
             logger.error(f"❌ Ошибка: {response.status_code}")
@@ -628,11 +642,9 @@ def process_media_group(media_group_id):
     
     post_key = str(int(time.time() * 1000))
     
-    # Загружаем первое фото как обложку с названием
     logger.info(f"📸 Загружаю первое фото как обложку...")
     featured_media_id, _ = download_and_upload_media(media_file_ids[0], False, is_thumbnail=False, title=title)
     
-    # Остальные фото для галереи
     gallery_file_ids = media_file_ids[1:] if len(media_file_ids) > 1 else []
     
     pending_posts[post_key] = {
@@ -707,7 +719,6 @@ def process_update(update_json):
                         media_count = len(post_data.get('media_file_ids', []))
                         media_type = "видео" if post_data.get('is_video') else f"{media_count} фото" if media_count > 0 else "нет"
                         
-                        # Показываем SEO информацию
                         seo_desc = generate_seo_description(
                             post_data.get('title', ''),
                             post_data.get('content', ''),
