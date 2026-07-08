@@ -208,18 +208,16 @@ def set_media_metadata(media_id, title, alt_text=None):
         if len(title) > 150:
             title = title[:147] + "..."
         
-        # Для галереи убираем название, чтобы оно не отображалось
         meta_data = {
             'title': title,
             'alt_text': alt_text,
-            'caption': '',  # Пустая подпись - не отображается
+            'caption': '',
             'description': f"Изображение к статье: {title}"
         }
         
         logger.info(f"📝 Устанавливаю метаданные для медиа ID={media_id}")
         logger.info(f"   Название: {title}")
         logger.info(f"   Alt-текст: {alt_text}")
-        logger.info(f"   Подпись: (пусто - не отображается)")
         
         response = wp_session.post(
             f"{WP_MEDIA_URL}/{media_id}",
@@ -237,6 +235,163 @@ def set_media_metadata(media_id, title, alt_text=None):
             
     except Exception as e:
         logger.error(f"❌ Ошибка установки метаданных: {e}")
+        return False
+
+def check_yoast_fields(post_id, post_type):
+    """Проверка мета-полей Yoast в созданном посте - ДИАГНОСТИКА"""
+    try:
+        logger.info("=" * 70)
+        logger.info("🔍 НАЧАЛО ДИАГНОСТИКИ МЕТА-ПОЛЕЙ YOAST SEO")
+        logger.info("=" * 70)
+        
+        # 1. Получаем пост
+        response = wp_session.get(
+            f"{WP_API_URL}/{post_type}/{post_id}",
+            auth=(WP_USERNAME, WP_PASSWORD),
+            timeout=30
+        )
+        
+        if response.status_code != 200:
+            logger.error(f"❌ Не удалось получить пост: {response.status_code}")
+            return False
+        
+        post_data = response.json()
+        meta = post_data.get('meta', {})
+        
+        logger.info(f"📌 ID поста: {post_id}")
+        logger.info(f"📌 Тип поста: {post_type}")
+        logger.info(f"📌 Заголовок: {post_data.get('title', {}).get('rendered', 'Неизвестно')}")
+        logger.info("-" * 70)
+        
+        # 2. Проверяем все возможные ключи Yoast
+        yoast_keys = [
+            '_yoast_wpseo_title',
+            '_yoast_wpseo_metadesc',
+            'yoast_wpseo_title',
+            'yoast_wpseo_metadesc',
+            '_yoast_wpseo_focuskw',
+            'rank_math_title',
+            'rank_math_description',
+            '_wpseo_metadesc',
+            '_wpseo_title',
+            'seo_title',
+            'seo_description',
+            '_aioseo_title',
+            '_aioseo_description'
+        ]
+        
+        found_fields = []
+        logger.info("📋 ПРОВЕРКА МЕТА-ПОЛЕЙ:")
+        for key in yoast_keys:
+            if key in meta:
+                found_fields.append(key)
+                value = meta[key]
+                if isinstance(value, str) and len(value) > 100:
+                    value = value[:100] + "..."
+                logger.info(f"  ✅ НАЙДЕНО: {key} = {value}")
+            else:
+                logger.info(f"  ❌ НЕ НАЙДЕНО: {key}")
+        
+        logger.info("-" * 70)
+        
+        if not found_fields:
+            logger.info("⚠️ НИ ОДНОГО ПОЛЯ YOAST НЕ НАЙДЕНО!")
+            logger.info(f"📋 Доступные мета-поля: {list(meta.keys())}")
+            
+            # Пробуем обновить через разные методы
+            logger.info("-" * 70)
+            logger.info("🔄 ПРОБУЕМ ОБНОВИТЬ МЕТА-ДАННЫЕ ЧЕРЕЗ РАЗНЫЕ МЕТОДЫ:")
+            
+            seo_title = post_data.get('title', {}).get('rendered', '')[:70]
+            seo_description = generate_seo_description(
+                post_data.get('title', {}).get('rendered', ''),
+                post_data.get('content', {}).get('rendered', ''),
+                post_type
+            )
+            
+            # Метод 1: Обновление через основной endpoint
+            logger.info("  📍 Метод 1: POST /{post_type}/{post_id}")
+            try:
+                update_data = {
+                    'meta': {
+                        '_yoast_wpseo_title': seo_title,
+                        '_yoast_wpseo_metadesc': seo_description,
+                        'yoast_wpseo_title': seo_title,
+                        'yoast_wpseo_metadesc': seo_description
+                    }
+                }
+                update_response = wp_session.post(
+                    f"{WP_API_URL}/{post_type}/{post_id}",
+                    auth=(WP_USERNAME, WP_PASSWORD),
+                    json=update_data,
+                    timeout=30
+                )
+                if update_response.status_code == 200:
+                    logger.info(f"  ✅ Успешно обновлено через основной endpoint")
+                else:
+                    logger.warning(f"  ⚠️ Ошибка: {update_response.status_code}")
+            except Exception as e:
+                logger.warning(f"  ⚠️ Ошибка: {e}")
+            
+            # Метод 2: Проверяем /meta endpoint
+            logger.info("  📍 Метод 2: POST /{post_type}/{post_id}/meta")
+            try:
+                meta_response = wp_session.get(
+                    f"{WP_API_URL}/{post_type}/{post_id}/meta",
+                    auth=(WP_USERNAME, WP_PASSWORD),
+                    timeout=30
+                )
+                if meta_response.status_code == 200:
+                    logger.info(f"  ✅ /meta endpoint доступен")
+                    meta_data = {
+                        '_yoast_wpseo_title': seo_title,
+                        '_yoast_wpseo_metadesc': seo_description
+                    }
+                    meta_post = wp_session.post(
+                        f"{WP_API_URL}/{post_type}/{post_id}/meta",
+                        auth=(WP_USERNAME, WP_PASSWORD),
+                        json=meta_data,
+                        timeout=30
+                    )
+                    if meta_post.status_code in [200, 201]:
+                        logger.info(f"  ✅ Успешно обновлено через /meta endpoint")
+                    else:
+                        logger.warning(f"  ⚠️ Ошибка: {meta_post.status_code}")
+                else:
+                    logger.info(f"  ❌ /meta endpoint не доступен (статус: {meta_response.status_code})")
+            except Exception as e:
+                logger.warning(f"  ⚠️ Ошибка: {e}")
+            
+            # Метод 3: Пробуем использовать raw meta
+            logger.info("  📍 Метод 3: POST /posts/{post_id}/meta (raw)")
+            try:
+                raw_meta = {
+                    'meta_key': '_yoast_wpseo_metadesc',
+                    'meta_value': seo_description
+                }
+                raw_response = wp_session.post(
+                    f"{WP_API_URL}/posts/{post_id}/meta",
+                    auth=(WP_USERNAME, WP_PASSWORD),
+                    json=raw_meta,
+                    timeout=30
+                )
+                if raw_response.status_code in [200, 201]:
+                    logger.info(f"  ✅ Успешно обновлено через raw meta")
+                else:
+                    logger.warning(f"  ⚠️ Ошибка: {raw_response.status_code}")
+            except Exception as e:
+                logger.warning(f"  ⚠️ Ошибка: {e}")
+        
+        logger.info("=" * 70)
+        logger.info("🏁 ДИАГНОСТИКА ЗАВЕРШЕНА")
+        logger.info("=" * 70)
+        
+        return bool(found_fields)
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка диагностики: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 def get_action_keyboard(post_key):
@@ -328,10 +483,6 @@ def format_content_for_wp(text, video_url=None, gallery_ids=None, is_video=False
                     formatted.append(f'[video width="100%" height="auto" mp4="{video_url}"]')
                     logger.info(f"🎬 Видео вставлено в контент после 1-го абзаца: {video_url}")
                 elif gallery_ids and len(gallery_ids) > 0:
-                    # Добавляем параметры для отключения подписей и названий
-                    # size="full" - полный размер
-                    # columns="1" - одна колонка
-                    # link="none" - без ссылки на страницу вложения
                     gallery_shortcode = '[gallery ids="' + ','.join(str(id) for id in gallery_ids) + '" size="full" columns="1" link="none"]'
                     formatted.append(gallery_shortcode)
                     logger.info(f"🖼️ Добавлена галерея из {len(gallery_ids)} фото после 1-го абзаца (без подписей)")
@@ -470,7 +621,7 @@ def create_wp_post(title, content, post_type, featured_media_id=None, video_url=
     seo_title = title[:70]
     seo_description = generate_seo_description(title, content, post_type)
     
-    # Формируем мета-данные для Yoast SEO
+    # Формируем пост с мета-данными
     post_data = {
         'title': title,
         'content': final_content,
@@ -481,12 +632,10 @@ def create_wp_post(title, content, post_type, featured_media_id=None, video_url=
             '_yoast_wpseo_metadesc': seo_description,
             'yoast_wpseo_title': seo_title,
             'yoast_wpseo_metadesc': seo_description,
-            'rank_math_title': seo_title,
-            'rank_math_description': seo_description,
             '_wpseo_metadesc': seo_description,
             '_wpseo_title': seo_title,
-            'description': seo_description,
-            '_description': seo_description
+            'seo_title': seo_title,
+            'seo_description': seo_description
         }
     }
     
@@ -513,31 +662,15 @@ def create_wp_post(title, content, post_type, featured_media_id=None, video_url=
         logger.info(f"📤 Ответ WP: {response.status_code}")
         
         if response.status_code == 201:
+            post_id = response.json()['id']
             post_link = response.json()['link']
             logger.info(f"✅ Пост создан: {post_link}")
-            logger.info(f"✅ SEO данные добавлены в Yoast")
             
-            # Дополнительное обновление мета-данных
-            post_id = response.json()['id']
-            try:
-                meta_update = {
-                    'meta': {
-                        '_yoast_wpseo_title': seo_title,
-                        '_yoast_wpseo_metadesc': seo_description
-                    }
-                }
-                update_response = wp_session.post(
-                    f"{WP_API_URL}/{post_type}/{post_id}",
-                    auth=(WP_USERNAME, WP_PASSWORD),
-                    json=meta_update,
-                    timeout=30
-                )
-                if update_response.status_code == 200:
-                    logger.info(f"✅ Мета-данные обновлены через дополнительный запрос")
-                else:
-                    logger.warning(f"⚠️ Не удалось обновить мета-данные: {update_response.status_code}")
-            except Exception as e:
-                logger.warning(f"⚠️ Ошибка обновления мета-данных: {e}")
+            # Запускаем ДИАГНОСТИКУ
+            logger.info("=" * 70)
+            logger.info("🔍 ЗАПУСК ДИАГНОСТИКИ YOAST SEO")
+            logger.info("=" * 70)
+            check_yoast_fields(post_id, post_type)
             
             return True, post_link
         else:
