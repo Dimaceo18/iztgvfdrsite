@@ -394,15 +394,23 @@ def download_and_upload_photo(file_id, is_video=False, is_thumbnail=False, title
         ext = 'mp4' if is_video else 'jpg'
         mime = 'video/mp4' if is_video else 'image/jpeg'
         
+        # ОЧИЩАЕМ НАЗВАНИЕ ФАЙЛА ОТ КИРИЛЛИЦЫ
         if title:
+            # Транслитерация или просто очистка
             clean_title = re.sub(r'[^\w\s-]', '', title)
             clean_title = re.sub(r'[-\s]+', '-', clean_title)
             clean_title = clean_title[:100]
+            # Убираем кириллицу
+            clean_title = re.sub(r'[^a-zA-Z0-9\-]', '', clean_title)
+            if not clean_title:
+                clean_title = f"media_{int(time.time())}"
             filename = f"{clean_title}_{int(time.time())}.{ext}"
         else:
-            filename = f'{media_type}_{int(time.time())}.{ext}'
+            filename = f'media_{int(time.time())}.{ext}'
         
-        # Используем рабочий метод из старой версии
+        logger.info(f"📸 Загружаю {media_type} в WordPress как: {filename}")
+        
+        # Правильные заголовки для загрузки (без кириллицы)
         wp_headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Accept': 'application/json',
@@ -410,8 +418,6 @@ def download_and_upload_photo(file_id, is_video=False, is_thumbnail=False, title
             'Content-Type': mime,
             'Content-Disposition': f'attachment; filename="{filename}"'
         }
-        
-        logger.info(f"📸 Загружаю {media_type} в WordPress как: {filename}")
         
         wp_response = wp_session.post(
             WP_MEDIA_URL,
@@ -425,6 +431,27 @@ def download_and_upload_photo(file_id, is_video=False, is_thumbnail=False, title
             media_id = wp_response.json()['id']
             source_url = wp_response.json().get('source_url', 'unknown')
             logger.info(f"✅ {media_type.capitalize()} загружено! ID={media_id}, URL={source_url}")
+            
+            # Устанавливаем метаданные с правильной кодировкой
+            if title:
+                try:
+                    meta_data = {
+                        'title': title[:100],
+                        'alt_text': title[:100],
+                        'caption': '',
+                        'description': f"Изображение к статье: {title[:100]}"
+                    }
+                    meta_response = wp_session.post(
+                        f"{WP_MEDIA_URL}/{media_id}",
+                        auth=(WP_USERNAME, WP_PASSWORD),
+                        json=meta_data,
+                        timeout=30
+                    )
+                    if meta_response.status_code == 200:
+                        logger.info(f"✅ Метаданные медиа обновлены")
+                except Exception as e:
+                    logger.warning(f"⚠️ Ошибка обновления метаданных: {e}")
+            
             return media_id
         else:
             logger.error(f"❌ Ошибка WP при загрузке {media_type}: {wp_response.status_code}")
@@ -494,9 +521,12 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
         post_data['date'] = schedule_time.isoformat()
         logger.info(f"⏰ Запланирована публикация на {schedule_time.strftime('%d.%m.%Y %H:%M')}")
     
-    if media_id:
+    # ПРОВЕРЯЕМ ЧТО media_id - ЧИСЛО
+    if media_id and isinstance(media_id, int):
         post_data['featured_media'] = media_id
         logger.info(f"📎 Устанавливаю обложку WP ID={media_id}")
+    elif media_id:
+        logger.warning(f"⚠️ media_id не является числом: {media_id} (тип: {type(media_id)})")
     
     if category_slug:
         category_id = get_category_id(post_type, category_slug)
@@ -588,8 +618,8 @@ def publish_scheduled_post(post_key):
             title,
             content,
             post_type,
-            media_id,
             category_slug,
+            media_id,
             True,
             video_url,
             is_video,
@@ -858,8 +888,8 @@ def process_update(update_json):
                     title,
                     content,
                     post_type,
-                    media_id,
                     category_slug,
+                    media_id,
                     True,
                     None,  # video_url
                     is_video,
@@ -929,8 +959,8 @@ def process_update(update_json):
                     title,
                     content,
                     post_type,
-                    media_id,
                     category_slug,
+                    media_id,
                     False,
                     None,
                     is_video,
