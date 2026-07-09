@@ -44,61 +44,61 @@ POST_TYPES = {
     "sport": "⚽ Спорт"
 }
 
-# Рубрики для каждого раздела
+# Рубрики для каждого раздела с ID
 CATEGORIES = {
     "news": {
-        "v-mire": "🌍 В мире",
-        "vlasti": "🏛️ Власти",
-        "city": "🏙️ Город",
-        "dengi": "💰 Деньги",
-        "zakon": "⚖️ Закон",
-        "proisshestviya": "🚨 Происшествия"
+        "v-mire": {"name": "🌍 В мире", "id": 32},
+        "vlasti": {"name": "🏛️ Власти", "id": 31},
+        "city": {"name": "🏙️ Город", "id": 27},
+        "dengi": {"name": "💰 Деньги", "id": 30},
+        "zakon": {"name": "⚖️ Закон", "id": 87},
+        "proisshestviya": {"name": "🚨 Происшествия", "id": 29}
     },
     "sport": {
-        "edinoborstva": "🥊 Единоборства",
-        "zimnie_vidy": "⛷️ Зимние виды",
-        "mirovoy_sport": "🌍 Мировой спорт",
-        "sbornaya_belarusi": "🇧🇾 Сборная Беларуси",
-        "tennis": "🎾 Теннис",
-        "futbol": "⚽ Футбол",
-        "hokkey": "🏒 Хоккей"
+        "edinoborstva": {"name": "🥊 Единоборства", "id": None},
+        "zimnie_vidy": {"name": "⛷️ Зимние виды", "id": None},
+        "mirovoy_sport": {"name": "🌍 Мировой спорт", "id": None},
+        "sbornaya_belarusi": {"name": "🇧🇾 Сборная Беларуси", "id": None},
+        "tennis": {"name": "🎾 Теннис", "id": None},
+        "futbol": {"name": "⚽ Футбол", "id": None},
+        "hokkey": {"name": "🏒 Хоккей", "id": None}
     },
     "realt": {
-        "za_gorodom": "🌳 За городом",
-        "kredity": "🏦 Кредиты",
-        "novostroyki": "🏗️ Новостройки",
-        "obzory": "📋 Обзоры",
-        "remont": "🔨 Ремонт"
+        "za_gorodom": {"name": "🌳 За городом", "id": None},
+        "kredity": {"name": "🏦 Кредиты", "id": None},
+        "novostroyki": {"name": "🏗️ Новостройки", "id": None},
+        "obzory": {"name": "📋 Обзоры", "id": None},
+        "remont": {"name": "🔨 Ремонт", "id": None}
     },
     "auto": {
-        "avarii-i-dtp": "🚗 Аварии и ДТП",
-        "avtorynok": "🏪 Авторынок",
-        "pdd": "📜 ПДД",
-        "test-drayvy": "🚘 Тест-драйвы и обзоры"
+        "avarii-i-dtp": {"name": "🚗 Аварии и ДТП", "id": None},
+        "avtorynok": {"name": "🏪 Авторынок", "id": None},
+        "pdd": {"name": "📜 ПДД", "id": None},
+        "test-drayvy": {"name": "🚘 Тест-драйвы и обзоры", "id": None}
     },
     "afisha": {
-        "vecherinki": "🎉 Вечеринки",
-        "vystavki": "🖼️ Выставки",
-        "vyhodnye": "📅 Выходные",
-        "detskaya_afisha": "🧒 Детская афиша",
-        "kvesty": "🔍 Квесты",
-        "kino": "🎬 Кино",
-        "koncerty": "🎵 Концерты",
-        "master-klassy": "🎨 Мастер-классы",
-        "obzory": "📋 Обзоры",
-        "obuchenie": "📚 Обучение",
-        "rekomendacii": "💡 Рекомендации",
-        "sobytiya": "📅 События",
-        "spektakli": "🎭 Спектакли",
-        "standap": "🎤 Стендап",
-        "festivali": "🎪 Фестивали",
-        "ekskursii": "🏛️ Экскурсии"
+        "vecherinki": {"name": "🎉 Вечеринки", "id": 70},
+        "vystavki": {"name": "🖼️ Выставки", "id": 104},
+        "vyhodnye": {"name": "📅 Выходные", "id": None},
+        "detskaya_afisha": {"name": "🧒 Детская афиша", "id": None},
+        "kvesty": {"name": "🔍 Квесты", "id": None},
+        "kino": {"name": "🎬 Кино", "id": None},
+        "koncerty": {"name": "🎵 Концерты", "id": None},
+        "master-klassy": {"name": "🎨 Мастер-классы", "id": None},
+        "obzory": {"name": "📋 Обзоры", "id": None},
+        "obuchenie": {"name": "📚 Обучение", "id": None},
+        "rekomendacii": {"name": "💡 Рекомендации", "id": None},
+        "sobytiya": {"name": "📅 События", "id": None},
+        "spektakli": {"name": "🎭 Спектакли", "id": None},
+        "standap": {"name": "🎤 Стендап", "id": None},
+        "festivali": {"name": "🎪 Фестивали", "id": None},
+        "ekskursii": {"name": "🏛️ Экскурсии", "id": None}
     },
     "sales": {
-        "buklety": "📰 Буклеты",
-        "novinki": "✨ Новинки",
-        "obzory": "📋 Обзоры",
-        "skidki": "🏷️ Скидки"
+        "buklety": {"name": "📰 Буклеты", "id": None},
+        "novinki": {"name": "✨ Новинки", "id": None},
+        "obzory": {"name": "📋 Обзоры", "id": None},
+        "skidki": {"name": "🏷️ Скидки", "id": None}
     }
 }
 
@@ -122,15 +122,79 @@ scheduled_posts = {}
 scheduled_timers = {}
 video_pending = {}
 
-# Кэш категорий
-category_cache = {}
-
 # Базовый URL для Telegram API
 TG_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 DEEPSEEK_PROMPT = """Ты редактор новостного сайта. Перепиши новость в строгом городском формате, объемом около 650 символов. Убери лишнюю воду, сделай интересный заголовок, никаких смайликов. Не используй символы # и ** в ответе. Сохрани главные факты. Расставь абзацы.
 
 ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст."""
+
+def get_category_id(post_type, category_slug):
+    """Получить ID категории из словаря"""
+    categories = CATEGORIES.get(post_type, {})
+    if category_slug in categories:
+        category_id = categories[category_slug].get('id')
+        if category_id:
+            logger.info(f"📂 Найдена рубрика: {category_slug} (ID: {category_id})")
+            return category_id
+        else:
+            logger.warning(f"⚠️ Для рубрики {category_slug} не указан ID")
+    else:
+        logger.warning(f"⚠️ Рубрика {category_slug} не найдена в словаре")
+    return None
+
+def set_post_categories(post_id, post_type, category_ids):
+    """Установка категорий для поста"""
+    try:
+        taxonomy = TAXONOMY_MAP.get(post_type, "category")
+        logger.info(f"📂 Устанавливаю рубрики для поста {post_id}")
+        logger.info(f"   Таксономия: {taxonomy}")
+        logger.info(f"   ID рубрик: {category_ids}")
+        
+        # Метод 1: через tax_input
+        update_data = {
+            'tax_input': {
+                taxonomy: category_ids
+            }
+        }
+        
+        response = wp_session.post(
+            f"{WP_API_URL}/{post_type}/{post_id}",
+            auth=(WP_USERNAME, WP_PASSWORD),
+            json=update_data,
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            logger.info(f"✅ Рубрики успешно установлены для поста {post_id}")
+            return True
+        else:
+            logger.warning(f"⚠️ Метод tax_input не сработал: {response.status_code}")
+            
+            # Метод 2: прямой запрос
+            logger.info("🔄 Пробую альтернативный метод...")
+            try:
+                term_url = f"{WP_URL}/wp-json/wp/v2/{taxonomy}"
+                for cat_id in category_ids:
+                    term_data = {'post': post_id}
+                    term_response = wp_session.post(
+                        f"{term_url}/{cat_id}",
+                        auth=(WP_USERNAME, WP_PASSWORD),
+                        json=term_data,
+                        timeout=30
+                    )
+                    if term_response.status_code in [200, 201]:
+                        logger.info(f"✅ Рубрика {cat_id} добавлена")
+                    else:
+                        logger.warning(f"⚠️ Ошибка добавления рубрики {cat_id}: {term_response.status_code}")
+            except Exception as e2:
+                logger.error(f"❌ Ошибка: {e2}")
+            
+            return False
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка установки рубрик: {e}")
+        return False
 
 def generate_seo_description(title, content, post_type=None):
     """Генерирует SEO-описание для Yoast"""
@@ -350,7 +414,7 @@ def process_text_with_deepseek(text):
         return None
 
 def download_and_upload_photo(file_id, is_video=False, is_thumbnail=False, title=None, alt_text=None):
-    """РАБОЧАЯ загрузка фото из Telegram в WordPress (из вашей рабочей версии)"""
+    """РАБОЧАЯ загрузка фото из Telegram в WordPress"""
     try:
         media_type = "видео" if is_video else "фото"
         logger.info(f"📸 НАЧАЛО ЗАГРУЗКИ {media_type.upper()}: file_id={file_id}")
@@ -377,7 +441,6 @@ def download_and_upload_photo(file_id, is_video=False, is_thumbnail=False, title
         media_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
         logger.info(f"📸 Скачиваю {media_type}...")
         
-        # Используем правильные заголовки для скачивания
         download_headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
@@ -390,7 +453,6 @@ def download_and_upload_photo(file_id, is_video=False, is_thumbnail=False, title
         media_content = media_response.content
         logger.info(f"✅ {media_type.capitalize()} скачано, размер: {len(media_content)} байт")
         
-        # УНИКАЛИЗАЦИЯ ФОТО (не видео)
         if not is_video:
             is_video_thumbnail = is_thumbnail
             media_content = unique_image(media_content, is_video_thumbnail)
@@ -399,7 +461,6 @@ def download_and_upload_photo(file_id, is_video=False, is_thumbnail=False, title
         ext = 'mp4' if is_video else 'jpg'
         mime = 'video/mp4' if is_video else 'image/jpeg'
         
-        # Имя файла - только латиница
         if title:
             clean_title = re.sub(r'[^\w\s-]', '', title)
             clean_title = re.sub(r'[-\s]+', '-', clean_title)
@@ -413,7 +474,6 @@ def download_and_upload_photo(file_id, is_video=False, is_thumbnail=False, title
         
         logger.info(f"📸 Загружаю {media_type} в WordPress как: {filename}")
         
-        # ПРАВИЛЬНЫЕ ЗАГОЛОВКИ ДЛЯ WORDPRESS (как в рабочей версии)
         wp_headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Accept': 'application/json',
@@ -435,7 +495,6 @@ def download_and_upload_photo(file_id, is_video=False, is_thumbnail=False, title
             source_url = wp_response.json().get('source_url', 'unknown')
             logger.info(f"✅ {media_type.capitalize()} загружено! ID={media_id}, URL={source_url}")
             
-            # Устанавливаем метаданные
             if title:
                 try:
                     meta_data = {
@@ -465,89 +524,10 @@ def download_and_upload_photo(file_id, is_video=False, is_thumbnail=False, title
         logger.error(f"❌ Ошибка загрузки медиа: {e}")
         return None
 
-def get_category_id(post_type, category_slug):
-    """Получить ID категории из кэша или из API"""
-    cache_key = f"{post_type}_{category_slug}"
-    if cache_key in category_cache:
-        return category_cache[cache_key]
-    
-    taxonomy = TAXONOMY_MAP.get(post_type, "category")
-    try:
-        cat_response = wp_session.get(
-            f"{WP_URL}/wp-json/wp/v2/{taxonomy}",
-            params={'slug': category_slug},
-            timeout=10
-        )
-        if cat_response.status_code == 200 and cat_response.json():
-            category_id = cat_response.json()[0]['id']
-            category_cache[cache_key] = category_id
-            logger.info(f"📂 Найдена рубрика: {category_slug} (ID: {category_id})")
-            return category_id
-    except Exception as e:
-        logger.warning(f"⚠️ Ошибка поиска рубрики {category_slug}: {e}")
-    
-    return None
-
-def set_post_categories(post_id, post_type, category_ids):
-    """Установка категорий для поста через отдельный запрос"""
-    try:
-        taxonomy = TAXONOMY_MAP.get(post_type, "category")
-        logger.info(f"📂 Устанавливаю рубрики для поста {post_id}")
-        logger.info(f"   Таксономия: {taxonomy}")
-        logger.info(f"   ID рубрик: {category_ids}")
-        
-        # Метод 1: через tax_input
-        update_data = {
-            'tax_input': {
-                taxonomy: category_ids
-            }
-        }
-        
-        response = wp_session.post(
-            f"{WP_API_URL}/{post_type}/{post_id}",
-            auth=(WP_USERNAME, WP_PASSWORD),
-            json=update_data,
-            timeout=30
-        )
-        
-        if response.status_code == 200:
-            logger.info(f"✅ Рубрики успешно установлены для поста {post_id}")
-            return True
-        else:
-            logger.warning(f"⚠️ Метод 1 не сработал: {response.status_code}")
-            
-            # Метод 2: через прямой запрос к терминам
-            logger.info("🔄 Пробую альтернативный метод...")
-            try:
-                term_url = f"{WP_URL}/wp-json/wp/v2/{taxonomy}"
-                for cat_id in category_ids:
-                    term_data = {
-                        'post': post_id
-                    }
-                    term_response = wp_session.post(
-                        f"{term_url}/{cat_id}",
-                        auth=(WP_USERNAME, WP_PASSWORD),
-                        json=term_data,
-                        timeout=30
-                    )
-                    if term_response.status_code in [200, 201]:
-                        logger.info(f"✅ Рубрика {cat_id} добавлена через альтернативный метод")
-                    else:
-                        logger.warning(f"⚠️ Ошибка добавления рубрики {cat_id}: {term_response.status_code}")
-            except Exception as e2:
-                logger.error(f"❌ Ошибка альтернативного метода: {e2}")
-            
-            return False
-            
-    except Exception as e:
-        logger.error(f"❌ Ошибка установки рубрик: {e}")
-        return False
-
 def create_wp_post(title, content, post_type, category_slug=None, media_id=None, publish=False, video_url=None, is_video=False, gallery_ids=None, schedule_time=None):
     """Создание поста в WordPress с видео, галереей, рубриками и SEO"""
     status = 'future' if schedule_time else ('publish' if publish else 'draft')
     
-    # Форматируем контент с медиа
     final_content = content
     if is_video and video_url:
         final_content = format_content_for_wp(content, video_url, None, is_video=True)
@@ -556,7 +536,6 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
         final_content = format_content_for_wp(content, None, gallery_ids, is_video=False)
         logger.info(f"🖼️ Галерея из {len(gallery_ids)} фото добавлена в контент")
     
-    # Генерируем SEO данные
     seo_title = title[:70]
     seo_description = generate_seo_description(title, content, post_type)
     
@@ -594,7 +573,6 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
         logger.info(f"🔍 SEO Заголовок: {seo_title}")
         logger.info(f"🔍 SEO Описание: {seo_description[:100]}...")
         
-        # Создаем пост
         response = wp_session.post(
             f"{WP_API_URL}/{post_type}",
             auth=(WP_USERNAME, WP_PASSWORD),
@@ -747,7 +725,8 @@ def process_update(update_json):
                     keyboard = {"inline_keyboard": []}
                     
                     row = []
-                    for cat_slug, cat_name in categories.items():
+                    for cat_slug, cat_data in categories.items():
+                        cat_name = cat_data.get('name', cat_slug)
                         row.append({"text": cat_name, "callback_data": f"select_category|{post_key}|{cat_slug}"})
                         if len(row) == 2:
                             keyboard["inline_keyboard"].append(row)
@@ -774,7 +753,8 @@ def process_update(update_json):
                     keyboard = get_action_keyboard(post_key)
                     
                     section_name = POST_TYPES.get(post_data['post_type'], post_data['post_type'])
-                    category_name = CATEGORIES.get(post_data['post_type'], {}).get(category_slug, category_slug)
+                    cat_data = CATEGORIES.get(post_data['post_type'], {}).get(category_slug, {})
+                    category_name = cat_data.get('name', category_slug)
                     media_type = "видео" if post_data.get('is_video') else "фото" if post_data.get('media_file_id') else "нет"
                     has_media = "есть" if post_data.get('media_file_id') else "нет"
                     
@@ -913,7 +893,6 @@ def process_update(update_json):
                 media_id = None
                 gallery_ids = []
                 
-                # Загружаем основное медиа (видео или фото)
                 if is_video and video_file_id:
                     logger.info(f"🎬 Загрузка видео...")
                     media_id = download_and_upload_photo(video_file_id, is_video=True, title=title)
@@ -929,7 +908,6 @@ def process_update(update_json):
                     else:
                         logger.warning("⚠️ Фото не загрузилось")
                 
-                # Загружаем фото для галереи
                 for file_id in gallery_file_ids:
                     if file_id != video_file_id:
                         logger.info(f"📸 Загрузка фото для галереи...")
@@ -1046,7 +1024,6 @@ def process_update(update_json):
             has_photo = 'photo' in message
             has_video = 'video' in message
             
-            # Медиа-группа (альбом)
             if media_group_id and has_photo:
                 photos = message['photo']
                 if photos and len(photos) > 0:
@@ -1077,7 +1054,6 @@ def process_update(update_json):
                     logger.info(f"⏳ Запущен таймер для группы {media_group_id} на 3 секунды")
                 return
             
-            # Одиночное фото
             if has_photo and not media_group_id:
                 photos = message['photo']
                 if photos and len(photos) > 0:
@@ -1087,8 +1063,6 @@ def process_update(update_json):
                 else:
                     media_file_id = None
                     is_video = False
-            
-            # Видео
             elif has_video:
                 media_file_id = message['video']['file_id']
                 is_video = True
@@ -1124,7 +1098,7 @@ def process_update(update_json):
             for pt_key, pt_name in POST_TYPES.items():
                 keyboard["inline_keyboard"].append([{"text": pt_name, "callback_data": f"select_post_type|{post_key}|{pt_key}"}])
             
-            media_type = "видео" if is_video else "фото" if media_file_id else "нет"
+            media_type = "видеo" if is_video else "фото" if media_file_id else "нет"
             tg_send_message(
                 chat_id,
                 f"📢 Пост получен!\n\n"
@@ -1227,7 +1201,6 @@ if __name__ == '__main__':
     logger.info(f"👤 Админ ID: {ADMIN_ID}")
     logger.info(f"🤖 DeepSeek: {'✅' if DEEPSEEK_API_KEY else '❌'}")
     logger.info(f"📂 Доступные разделы: {', '.join(POST_TYPES.values())}")
-    logger.info(f"📋 Доступные рубрики: {sum(len(c) for c in CATEGORIES.values())}")
     
     try:
         requests.post(f"{TG_API_URL}/deleteWebhook")
