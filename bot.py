@@ -47,58 +47,58 @@ POST_TYPES = {
 # Рубрики для каждого раздела с ID
 CATEGORIES = {
     "news": {
-        "v-mire": {"name": "В мире", "id": 32},
-        "vlasti": {"name": "Власти", "id": 31},
-        "city": {"name": "Город", "id": 27},
-        "dengi": {"name": "Деньги", "id": 30},
-        "zakon": {"name": "Закон", "id": 87},
-        "proisshestviya": {"name": "Происшествия", "id": 29}
+        "v-mire": {"name": "🌍 В мире", "id": 32},
+        "vlasti": {"name": "🏛️ Власти", "id": 31},
+        "city": {"name": "🏙️ Город", "id": 27},
+        "dengi": {"name": "💰 Деньги", "id": 30},
+        "zakon": {"name": "⚖️ Закон", "id": 87},
+        "proisshestviya": {"name": "🚨 Происшествия", "id": 29}
     },
     "sport": {
-        "edinoborstva": {"name": "Единоборства", "id": None},
-        "zimnie_vidy": {"name": "Зимние виды", "id": None},
-        "mirovoy_sport": {"name": "Мировой спорт", "id": None},
-        "sbornaya_belarusi": {"name": "Сборная Беларуси", "id": None},
-        "tennis": {"name": "Теннис", "id": None},
-        "futbol": {"name": "Футбол", "id": None},
-        "hokkey": {"name": "Хоккей", "id": None}
+        "edinoborstva": {"name": "🥊 Единоборства", "id": None},
+        "zimnie_vidy": {"name": "⛷️ Зимние виды", "id": None},
+        "mirovoy_sport": {"name": "🌍 Мировой спорт", "id": None},
+        "sbornaya_belarusi": {"name": "🇧🇾 Сборная Беларуси", "id": None},
+        "tennis": {"name": "🎾 Теннис", "id": None},
+        "futbol": {"name": "⚽ Футбол", "id": None},
+        "hokkey": {"name": "🏒 Хоккей", "id": None}
     },
     "realt": {
-        "za_gorodom": {"name": "За городом", "id": None},
-        "kredity": {"name": "Кредиты", "id": None},
-        "novostroyki": {"name": "Новостройки", "id": None},
-        "obzory": {"name": "Обзоры", "id": None},
-        "remont": {"name": "Ремонт", "id": None}
+        "za_gorodom": {"name": "🌳 За городом", "id": None},
+        "kredity": {"name": "🏦 Кредиты", "id": None},
+        "novostroyki": {"name": "🏗️ Новостройки", "id": None},
+        "obzory": {"name": "📋 Обзоры", "id": None},
+        "remont": {"name": "🔨 Ремонт", "id": None}
     },
     "auto": {
-        "avarii-i-dtp": {"name": "Аварии и ДТП", "id": None},
-        "avtorynok": {"name": "Авторынок", "id": None},
-        "pdd": {"name": "ПДД", "id": None},
-        "test-drayvy": {"name": "Тест-драйвы и обзоры", "id": None}
+        "avarii-i-dtp": {"name": "🚗 Аварии и ДТП", "id": None},
+        "avtorynok": {"name": "🏪 Авторынок", "id": None},
+        "pdd": {"name": "📜 ПДД", "id": None},
+        "test-drayvy": {"name": "🚘 Тест-драйвы и обзоры", "id": None}
     },
     "afisha": {
-        "vecherinki": {"name": "Вечеринки", "id": 70},
-        "vystavki": {"name": "Выставки", "id": 104},
-        "vyhodnye": {"name": "Выходные", "id": None},
-        "detskaya_afisha": {"name": "Детская афиша", "id": None},
-        "kvesty": {"name": "Квесты", "id": None},
-        "kino": {"name": "Кино", "id": None},
-        "koncerty": {"name": "Концерты", "id": None},
-        "master-klassy": {"name": "Мастер-классы", "id": None},
-        "obzory": {"name": "Обзоры", "id": None},
-        "obuchenie": {"name": "Обучение", "id": None},
-        "rekomendacii": {"name": "Рекомендации", "id": None},
-        "sobytiya": {"name": "События", "id": None},
-        "spektakli": {"name": "Спектакли", "id": None},
-        "standap": {"name": "Стендап", "id": None},
-        "festivali": {"name": "Фестивали", "id": None},
-        "ekskursii": {"name": "Экскурсии", "id": None}
+        "vecherinki": {"name": "🎉 Вечеринки", "id": 70},
+        "vystavki": {"name": "🖼️ Выставки", "id": 104},
+        "vyhodnye": {"name": "📅 Выходные", "id": None},
+        "detskaya_afisha": {"name": "🧒 Детская афиша", "id": None},
+        "kvesty": {"name": "🔍 Квесты", "id": None},
+        "kino": {"name": "🎬 Кино", "id": None},
+        "koncerty": {"name": "🎵 Концерты", "id": None},
+        "master-klassy": {"name": "🎨 Мастер-классы", "id": None},
+        "obzory": {"name": "📋 Обзоры", "id": None},
+        "obuchenie": {"name": "📚 Обучение", "id": None},
+        "rekomendacii": {"name": "💡 Рекомендации", "id": None},
+        "sobytiya": {"name": "📅 События", "id": None},
+        "spektakli": {"name": "🎭 Спектакли", "id": None},
+        "standap": {"name": "🎤 Стендап", "id": None},
+        "festivali": {"name": "🎪 Фестивали", "id": None},
+        "ekskursii": {"name": "🏛️ Экскурсии", "id": None}
     },
     "sales": {
-        "buklety": {"name": "Буклеты", "id": None},
-        "novinki": {"name": "Новинки", "id": None},
-        "obzory": {"name": "Обзоры", "id": None},
-        "skidki": {"name": "Скидки", "id": None}
+        "buklety": {"name": "📰 Буклеты", "id": None},
+        "novinki": {"name": "✨ Новинки", "id": None},
+        "obzory": {"name": "📋 Обзоры", "id": None},
+        "skidki": {"name": "🏷️ Скидки", "id": None}
     }
 }
 
@@ -144,18 +144,17 @@ def get_category_id(post_type, category_slug):
     return None
 
 def set_post_categories(post_id, post_type, category_ids):
-    """Установка категорий для поста через прямое добавление терминов"""
+    """Установка категорий для поста через прямой запрос к терминам"""
     try:
         taxonomy = TAXONOMY_MAP.get(post_type, "category")
         logger.info(f"📂 Устанавливаю рубрики для поста {post_id}")
         logger.info(f"   Таксономия: {taxonomy}")
         logger.info(f"   ID рубрик: {category_ids}")
         
-        # Метод 1: Добавляем рубрики через /wp/v2/{taxonomy}/{term_id}
         success_count = 0
         for cat_id in category_ids:
             try:
-                # Используем POST к термину для добавления к посту
+                # Прямой запрос к термину для добавления к посту
                 term_url = f"{WP_URL}/wp-json/wp/v2/{taxonomy}/{cat_id}"
                 term_data = {
                     'post': post_id
@@ -178,60 +177,7 @@ def set_post_categories(post_id, post_type, category_ids):
             except Exception as e:
                 logger.error(f"❌ Ошибка добавления рубрики {cat_id}: {e}")
         
-        # Метод 2: Обновляем пост с tax_input (как fallback)
-        if success_count == 0:
-            logger.info("🔄 Пробую метод через tax_input...")
-            update_data = {
-                'tax_input': {
-                    taxonomy: category_ids
-                }
-            }
-            
-            response = wp_session.post(
-                f"{WP_API_URL}/{post_type}/{post_id}",
-                auth=(WP_USERNAME, WP_PASSWORD),
-                json=update_data,
-                timeout=30
-            )
-            
-            if response.status_code == 200:
-                logger.info(f"✅ Рубрики установлены через tax_input")
-                success_count = len(category_ids)
-            else:
-                logger.warning(f"⚠️ Метод tax_input не сработал: {response.status_code}")
-        
-        # Метод 3: Используем batch-запрос если есть
-        if success_count == 0:
-            logger.info("🔄 Пробую массовое добавление...")
-            try:
-                batch_url = f"{WP_URL}/wp-json/wp/v2/{taxonomy}/batch"
-                batch_data = {
-                    'create': [],
-                    'update': [],
-                    'delete': []
-                }
-                # Добавляем термины к посту
-                for cat_id in category_ids:
-                    batch_data['update'].append({
-                        'id': cat_id,
-                        'post': post_id
-                    })
-                
-                batch_response = wp_session.post(
-                    batch_url,
-                    auth=(WP_USERNAME, WP_PASSWORD),
-                    json=batch_data,
-                    timeout=30
-                )
-                
-                if batch_response.status_code in [200, 201]:
-                    logger.info(f"✅ Рубрики добавлены через batch-запрос")
-                    success_count = len(category_ids)
-                else:
-                    logger.warning(f"⚠️ Batch-запрос не сработал: {batch_response.status_code}")
-            except:
-                pass
-        
+        # Проверяем, что рубрики добавились
         if success_count > 0:
             logger.info(f"✅ Рубрики успешно установлены для поста {post_id}")
             return True
@@ -241,8 +187,6 @@ def set_post_categories(post_id, post_type, category_ids):
             
     except Exception as e:
         logger.error(f"❌ Ошибка установки рубрик: {e}")
-        import traceback
-        traceback.print_exc()
         return False
 
 def generate_seo_description(title, content, post_type=None):
@@ -462,8 +406,9 @@ def process_text_with_deepseek(text):
         logger.error(f"Ошибка DeepSeek: {e}")
         return None
 
+# ⚠️ РАБОЧАЯ ЗАГРУЗКА ФОТО — НЕ МЕНЯТЬ! ⚠️
 def download_and_upload_photo(file_id, is_video=False, is_thumbnail=False, title=None, alt_text=None):
-    """РАБОЧАЯ загрузка фото из Telegram в WordPress"""
+    """РАБОЧАЯ загрузка фото из Telegram в WordPress — НЕ МЕНЯТЬ!"""
     try:
         media_type = "видео" if is_video else "фото"
         logger.info(f"📸 НАЧАЛО ЗАГРУЗКИ {media_type.upper()}: file_id={file_id}")
@@ -490,6 +435,7 @@ def download_and_upload_photo(file_id, is_video=False, is_thumbnail=False, title
         media_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
         logger.info(f"📸 Скачиваю {media_type}...")
         
+        # Скачиваем фото
         download_headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
@@ -523,6 +469,7 @@ def download_and_upload_photo(file_id, is_video=False, is_thumbnail=False, title
         
         logger.info(f"📸 Загружаю {media_type} в WordPress как: {filename}")
         
+        # ⚠️ РАБОЧИЙ МЕТОД ЗАГРУЗКИ ⚠️
         wp_headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Accept': 'application/json',
@@ -639,7 +586,6 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
             if category_slug:
                 category_id = get_category_id(post_type, category_slug)
                 if category_id:
-                    # Устанавливаем рубрики через отдельный запрос
                     set_post_categories(post_id, post_type, [category_id])
                 else:
                     logger.warning(f"⚠️ Рубрика {category_slug} не найдена")
