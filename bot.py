@@ -394,9 +394,8 @@ def download_and_upload_photo(file_id, is_video=False, is_thumbnail=False, title
         ext = 'mp4' if is_video else 'jpg'
         mime = 'video/mp4' if is_video else 'image/jpeg'
         
-        # ОЧИЩАЕМ НАЗВАНИЕ ФАЙЛА ОТ КИРИЛЛИЦЫ
+        # ОЧИЩАЕМ НАЗВАНИЕ ФАЙЛА ОТ КИРИЛЛИЦЫ (только латиница)
         if title:
-            # Транслитерация или просто очистка
             clean_title = re.sub(r'[^\w\s-]', '', title)
             clean_title = re.sub(r'[-\s]+', '-', clean_title)
             clean_title = clean_title[:100]
@@ -485,6 +484,63 @@ def get_category_id(post_type, category_slug):
     
     return None
 
+def set_post_categories(post_id, post_type, category_ids):
+    """Установка категорий для поста через отдельный запрос"""
+    try:
+        taxonomy = TAXONOMY_MAP.get(post_type, "category")
+        
+        # Формируем данные для обновления
+        update_data = {
+            'tax_input': {
+                taxonomy: category_ids
+            }
+        }
+        
+        logger.info(f"📂 Устанавливаю рубрики для поста {post_id}: {category_ids}")
+        
+        response = wp_session.post(
+            f"{WP_API_URL}/{post_type}/{post_id}",
+            auth=(WP_USERNAME, WP_PASSWORD),
+            json=update_data,
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            logger.info(f"✅ Рубрики успешно установлены для поста {post_id}")
+            return True
+        else:
+            logger.error(f"❌ Ошибка установки рубрик: {response.status_code}")
+            logger.error(f"Ответ: {response.text[:200]}")
+            
+            # Пробуем альтернативный метод
+            try:
+                # Используем прямой запрос к терминам
+                term_url = f"{WP_URL}/wp-json/wp/v2/{taxonomy}"
+                for cat_id in category_ids:
+                    term_data = {
+                        'post': post_id,
+                        'taxonomy': taxonomy,
+                        'id': cat_id
+                    }
+                    term_response = wp_session.post(
+                        f"{term_url}/{cat_id}",
+                        auth=(WP_USERNAME, WP_PASSWORD),
+                        json=term_data,
+                        timeout=30
+                    )
+                    if term_response.status_code == 200:
+                        logger.info(f"✅ Рубрика {cat_id} добавлена через альтернативный метод")
+                    else:
+                        logger.warning(f"⚠️ Ошибка добавления рубрики {cat_id}: {term_response.status_code}")
+            except Exception as e2:
+                logger.error(f"❌ Ошибка альтернативного метода: {e2}")
+            
+            return False
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка установки рубрик: {e}")
+        return False
+
 def create_wp_post(title, content, post_type, category_slug=None, media_id=None, publish=False, video_url=None, is_video=False, gallery_ids=None, schedule_time=None):
     """Создание поста в WordPress с видео, галереей, рубриками и SEO"""
     status = 'future' if schedule_time else ('publish' if publish else 'draft')
@@ -521,23 +577,9 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
         post_data['date'] = schedule_time.isoformat()
         logger.info(f"⏰ Запланирована публикация на {schedule_time.strftime('%d.%m.%Y %H:%M')}")
     
-    # ПРОВЕРЯЕМ ЧТО media_id - ЧИСЛО
     if media_id and isinstance(media_id, int):
         post_data['featured_media'] = media_id
         logger.info(f"📎 Устанавливаю обложку WP ID={media_id}")
-    elif media_id:
-        logger.warning(f"⚠️ media_id не является числом: {media_id} (тип: {type(media_id)})")
-    
-    if category_slug:
-        category_id = get_category_id(post_type, category_slug)
-        if category_id:
-            taxonomy = TAXONOMY_MAP.get(post_type, "category")
-            post_data['tax_input'] = {
-                taxonomy: [category_id]
-            }
-            logger.info(f"📂 Добавлена рубрика: {category_slug} (ID: {category_id})")
-        else:
-            logger.warning(f"⚠️ Рубрика {category_slug} не найдена")
     
     try:
         headers = {
@@ -550,6 +592,7 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
         logger.info(f"🔍 SEO Заголовок: {seo_title}")
         logger.info(f"🔍 SEO Описание: {seo_description[:100]}...")
         
+        # Сначала создаем пост
         response = wp_session.post(
             f"{WP_API_URL}/{post_type}",
             auth=(WP_USERNAME, WP_PASSWORD),
@@ -559,8 +602,19 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
         )
         
         if response.status_code == 201:
+            post_id = response.json()['id']
             post_link = response.json()['link']
-            logger.info(f"✅ Пост создан: {post_link}")
+            logger.info(f"✅ Пост создан: {post_link} (ID: {post_id})")
+            
+            # Затем устанавливаем рубрики
+            if category_slug:
+                category_id = get_category_id(post_type, category_slug)
+                if category_id:
+                    # Используем отдельную функцию для установки рубрик
+                    set_post_categories(post_id, post_type, [category_id])
+                else:
+                    logger.warning(f"⚠️ Рубрика {category_slug} не найдена")
+            
             logger.info(f"✅ SEO данные добавлены в Yoast")
             return True, post_link
         else:
