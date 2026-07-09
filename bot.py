@@ -350,7 +350,7 @@ def process_text_with_deepseek(text):
         return None
 
 def download_and_upload_photo(file_id, is_video=False, is_thumbnail=False, title=None, alt_text=None):
-    """РАБОЧАЯ загрузка фото из Telegram в WordPress с уникализацией"""
+    """РАБОЧАЯ загрузка фото из Telegram в WordPress (из вашей рабочей версии)"""
     try:
         media_type = "видео" if is_video else "фото"
         logger.info(f"📸 НАЧАЛО ЗАГРУЗКИ {media_type.upper()}: file_id={file_id}")
@@ -377,7 +377,12 @@ def download_and_upload_photo(file_id, is_video=False, is_thumbnail=False, title
         media_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
         logger.info(f"📸 Скачиваю {media_type}...")
         
-        media_response = requests.get(media_url, timeout=120)
+        # Используем правильные заголовки для скачивания
+        download_headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        
+        media_response = requests.get(media_url, headers=download_headers, timeout=120)
         if media_response.status_code != 200:
             logger.error(f"❌ Ошибка скачивания {media_type}: {media_response.status_code}")
             return None
@@ -394,12 +399,11 @@ def download_and_upload_photo(file_id, is_video=False, is_thumbnail=False, title
         ext = 'mp4' if is_video else 'jpg'
         mime = 'video/mp4' if is_video else 'image/jpeg'
         
-        # ОЧИЩАЕМ НАЗВАНИЕ ФАЙЛА ОТ КИРИЛЛИЦЫ (только латиница)
+        # Имя файла - только латиница
         if title:
             clean_title = re.sub(r'[^\w\s-]', '', title)
             clean_title = re.sub(r'[-\s]+', '-', clean_title)
             clean_title = clean_title[:100]
-            # Убираем кириллицу
             clean_title = re.sub(r'[^a-zA-Z0-9\-]', '', clean_title)
             if not clean_title:
                 clean_title = f"media_{int(time.time())}"
@@ -409,7 +413,7 @@ def download_and_upload_photo(file_id, is_video=False, is_thumbnail=False, title
         
         logger.info(f"📸 Загружаю {media_type} в WordPress как: {filename}")
         
-        # Правильные заголовки для загрузки (без кириллицы)
+        # ПРАВИЛЬНЫЕ ЗАГОЛОВКИ ДЛЯ WORDPRESS (как в рабочей версии)
         wp_headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Accept': 'application/json',
@@ -431,7 +435,7 @@ def download_and_upload_photo(file_id, is_video=False, is_thumbnail=False, title
             source_url = wp_response.json().get('source_url', 'unknown')
             logger.info(f"✅ {media_type.capitalize()} загружено! ID={media_id}, URL={source_url}")
             
-            # Устанавливаем метаданные с правильной кодировкой
+            # Устанавливаем метаданные
             if title:
                 try:
                     meta_data = {
@@ -488,15 +492,16 @@ def set_post_categories(post_id, post_type, category_ids):
     """Установка категорий для поста через отдельный запрос"""
     try:
         taxonomy = TAXONOMY_MAP.get(post_type, "category")
+        logger.info(f"📂 Устанавливаю рубрики для поста {post_id}")
+        logger.info(f"   Таксономия: {taxonomy}")
+        logger.info(f"   ID рубрик: {category_ids}")
         
-        # Формируем данные для обновления
+        # Метод 1: через tax_input
         update_data = {
             'tax_input': {
                 taxonomy: category_ids
             }
         }
-        
-        logger.info(f"📂 Устанавливаю рубрики для поста {post_id}: {category_ids}")
         
         response = wp_session.post(
             f"{WP_API_URL}/{post_type}/{post_id}",
@@ -509,18 +514,15 @@ def set_post_categories(post_id, post_type, category_ids):
             logger.info(f"✅ Рубрики успешно установлены для поста {post_id}")
             return True
         else:
-            logger.error(f"❌ Ошибка установки рубрик: {response.status_code}")
-            logger.error(f"Ответ: {response.text[:200]}")
+            logger.warning(f"⚠️ Метод 1 не сработал: {response.status_code}")
             
-            # Пробуем альтернативный метод
+            # Метод 2: через прямой запрос к терминам
+            logger.info("🔄 Пробую альтернативный метод...")
             try:
-                # Используем прямой запрос к терминам
                 term_url = f"{WP_URL}/wp-json/wp/v2/{taxonomy}"
                 for cat_id in category_ids:
                     term_data = {
-                        'post': post_id,
-                        'taxonomy': taxonomy,
-                        'id': cat_id
+                        'post': post_id
                     }
                     term_response = wp_session.post(
                         f"{term_url}/{cat_id}",
@@ -528,7 +530,7 @@ def set_post_categories(post_id, post_type, category_ids):
                         json=term_data,
                         timeout=30
                     )
-                    if term_response.status_code == 200:
+                    if term_response.status_code in [200, 201]:
                         logger.info(f"✅ Рубрика {cat_id} добавлена через альтернативный метод")
                     else:
                         logger.warning(f"⚠️ Ошибка добавления рубрики {cat_id}: {term_response.status_code}")
@@ -592,7 +594,7 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
         logger.info(f"🔍 SEO Заголовок: {seo_title}")
         logger.info(f"🔍 SEO Описание: {seo_description[:100]}...")
         
-        # Сначала создаем пост
+        # Создаем пост
         response = wp_session.post(
             f"{WP_API_URL}/{post_type}",
             auth=(WP_USERNAME, WP_PASSWORD),
@@ -606,11 +608,10 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
             post_link = response.json()['link']
             logger.info(f"✅ Пост создан: {post_link} (ID: {post_id})")
             
-            # Затем устанавливаем рубрики
+            # Устанавливаем рубрики
             if category_slug:
                 category_id = get_category_id(post_type, category_slug)
                 if category_id:
-                    # Используем отдельную функцию для установки рубрик
                     set_post_categories(post_id, post_type, [category_id])
                 else:
                     logger.warning(f"⚠️ Рубрика {category_slug} не найдена")
@@ -659,7 +660,6 @@ def publish_scheduled_post(post_key):
             else:
                 logger.error("❌ Не удалось загрузить видео")
         
-        # Загружаем фото для галереи
         for file_id in gallery_file_ids:
             if file_id != video_file_id:
                 logger.info(f"📸 Загрузка фото для галереи...")
@@ -945,7 +945,7 @@ def process_update(update_json):
                     category_slug,
                     media_id,
                     True,
-                    None,  # video_url
+                    None,
                     is_video,
                     gallery_ids if gallery_ids else None,
                     None
