@@ -144,23 +144,20 @@ def get_category_id(post_type, category_slug):
     return None
 
 def set_post_categories(post_id, post_type, category_ids):
-    """Установка категорий для поста через прямой запрос к терминам"""
+    """Установка категорий для поста"""
     try:
         taxonomy = TAXONOMY_MAP.get(post_type, "category")
         logger.info(f"📂 Устанавливаю рубрики для поста {post_id}")
         logger.info(f"   Таксономия: {taxonomy}")
         logger.info(f"   ID рубрик: {category_ids}")
         
+        # Добавляем рубрики через POST к термину
         success_count = 0
         for cat_id in category_ids:
             try:
-                # Прямой запрос к термину для добавления к посту
                 term_url = f"{WP_URL}/wp-json/wp/v2/{taxonomy}/{cat_id}"
-                term_data = {
-                    'post': post_id
-                }
+                term_data = {'post': post_id}
                 
-                logger.info(f"🔄 Добавляю рубрику {cat_id} к посту {post_id}...")
                 term_response = wp_session.post(
                     term_url,
                     auth=(WP_USERNAME, WP_PASSWORD),
@@ -169,21 +166,14 @@ def set_post_categories(post_id, post_type, category_ids):
                 )
                 
                 if term_response.status_code in [200, 201]:
-                    logger.info(f"✅ Рубрика {cat_id} успешно добавлена к посту {post_id}")
+                    logger.info(f"✅ Рубрика {cat_id} успешно добавлена")
                     success_count += 1
                 else:
                     logger.warning(f"⚠️ Ошибка добавления рубрики {cat_id}: {term_response.status_code}")
-                    logger.warning(f"   Ответ: {term_response.text[:200]}")
             except Exception as e:
                 logger.error(f"❌ Ошибка добавления рубрики {cat_id}: {e}")
         
-        # Проверяем, что рубрики добавились
-        if success_count > 0:
-            logger.info(f"✅ Рубрики успешно установлены для поста {post_id}")
-            return True
-        else:
-            logger.error(f"❌ Не удалось установить рубрики для поста {post_id}")
-            return False
+        return success_count > 0
             
     except Exception as e:
         logger.error(f"❌ Ошибка установки рубрик: {e}")
@@ -406,9 +396,9 @@ def process_text_with_deepseek(text):
         logger.error(f"Ошибка DeepSeek: {e}")
         return None
 
-# ⚠️ РАБОЧАЯ ЗАГРУЗКА ФОТО — НЕ МЕНЯТЬ! ⚠️
+# ⚠️ РАБОЧАЯ ЗАГРУЗКА ФОТО - НЕ МЕНЯТЬ! ⚠️
 def download_and_upload_photo(file_id, is_video=False, is_thumbnail=False, title=None, alt_text=None):
-    """РАБОЧАЯ загрузка фото из Telegram в WordPress — НЕ МЕНЯТЬ!"""
+    """РАБОЧАЯ загрузка фото из Telegram в WordPress - НЕ МЕНЯТЬ!"""
     try:
         media_type = "видео" if is_video else "фото"
         logger.info(f"📸 НАЧАЛО ЗАГРУЗКИ {media_type.upper()}: file_id={file_id}")
@@ -435,7 +425,6 @@ def download_and_upload_photo(file_id, is_video=False, is_thumbnail=False, title
         media_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
         logger.info(f"📸 Скачиваю {media_type}...")
         
-        # Скачиваем фото
         download_headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
@@ -469,7 +458,7 @@ def download_and_upload_photo(file_id, is_video=False, is_thumbnail=False, title
         
         logger.info(f"📸 Загружаю {media_type} в WordPress как: {filename}")
         
-        # ⚠️ РАБОЧИЙ МЕТОД ЗАГРУЗКИ ⚠️
+        # ⚠️ РАБОЧИЙ МЕТОД ЗАГРУЗКИ - НЕ МЕНЯТЬ! ⚠️
         wp_headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Accept': 'application/json',
@@ -582,7 +571,6 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
             post_link = response.json()['link']
             logger.info(f"✅ Пост создан: {post_link} (ID: {post_id})")
             
-            # Устанавливаем рубрики
             if category_slug:
                 category_id = get_category_id(post_type, category_slug)
                 if category_id:
@@ -601,6 +589,7 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
         logger.error(f"❌ Ошибка: {e}")
         return False, None
 
+# ОСТАЛЬНОЙ КОД - ТОТ ЖЕ САМЫЙ
 def publish_scheduled_post(post_key):
     """Публикация отложенного поста"""
     if post_key not in scheduled_posts:
