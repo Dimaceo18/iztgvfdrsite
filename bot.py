@@ -114,13 +114,13 @@ TAXONOMY_MAP = {
 app = Flask(__name__)
 wp_session = requests.Session()
 
-# Хранилище
+# Хранилища
 pending_posts = {}
 media_groups = defaultdict(dict)
 group_timers = {}
 scheduled_posts = {}
 scheduled_timers = {}
-video_pending = {}
+video_awaiting_photo = {}  # Хранит данные видео, ожидающие фото
 
 # Базовый URL для Telegram API
 TG_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
@@ -396,7 +396,6 @@ def process_text_with_deepseek(text):
         logger.error(f"Ошибка DeepSeek: {e}")
         return None
 
-# ⚠️ РАБОЧАЯ ЗАГРУЗКА ФОТО - НЕ МЕНЯТЬ! ⚠️
 def download_and_upload_photo(file_id, is_video=False, is_thumbnail=False, title=None, alt_text=None):
     """РАБОЧАЯ загрузка фото из Telegram в WordPress - НЕ МЕНЯТЬ!"""
     try:
@@ -589,7 +588,6 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
         logger.error(f"❌ Ошибка: {e}")
         return False, None
 
-# ОСТАЛЬНОЙ КОД - ТОТ ЖЕ САМЫЙ
 def publish_scheduled_post(post_key):
     """Публикация отложенного поста"""
     if post_key not in scheduled_posts:
@@ -680,6 +678,63 @@ def get_action_keyboard(post_key):
             ]
         ]
     }
+
+def process_media_group(media_group_id):
+    """Обработка собранной медиа-группы (альбома)"""
+    if media_group_id not in media_groups:
+        return
+    
+    group_data = media_groups[media_group_id]
+    chat_id = group_data.get('chat_id')
+    
+    if not group_data.get('text'):
+        tg_send_message(chat_id, "❌ Отправьте текст новости.\nПервая строка будет заголовком.")
+        del media_groups[media_group_id]
+        return
+    
+    media_file_ids = group_data.get('file_ids', [])
+    text = group_data.get('text', '')
+    
+    if not media_file_ids:
+        tg_send_message(chat_id, "❌ Нет медиа для публикации.")
+        del media_groups[media_group_id]
+        return
+    
+    logger.info(f"📸 Обработка группы {media_group_id}: {len(media_file_ids)} файлов")
+    
+    title, content = extract_title_and_content(text)
+    formatted_content = format_content_for_wp(content)
+    
+    post_key = str(int(time.time() * 1000))
+    
+    pending_posts[post_key] = {
+        'original_text': text,
+        'media_file_id': media_file_ids[0] if media_file_ids else None,
+        'is_video': False,
+        'title': title,
+        'content': formatted_content,
+        'gallery_file_ids': media_file_ids[1:] if len(media_file_ids) > 1 else []
+    }
+    
+    keyboard = {
+        "inline_keyboard": []
+    }
+    for pt_key, pt_name in POST_TYPES.items():
+        keyboard["inline_keyboard"].append([{"text": pt_name, "callback_data": f"select_post_type|{post_key}|{pt_key}"}])
+    
+    tg_send_message(
+        chat_id,
+        f"📸 Альбом получен! ({len(media_file_ids)} фото)\n\n"
+        f"📌 {title}\n\n"
+        f"📝 {content[:300]}...\n\n"
+        f"📂 Выбери раздел для публикации:",
+        json.dumps(keyboard)
+    )
+    
+    if media_group_id in media_groups:
+        del media_groups[media_group_id]
+    if media_group_id in group_timers:
+        del group_timers[media_group_id]
 
 def process_update(update_json):
     try:
@@ -1009,6 +1064,53 @@ def process_update(update_json):
             has_photo = 'photo' in message
             has_video = 'video' in message
             
+            # НОВАЯ ЛОГИКА: Проверяем, ожидаем ли мы фото для видео
+            if has_photo and chat_id in video_awaiting_photo:
+                # Получаем данные ожидающего видео
+                video_data = video_awaiting_photo[chat_id]
+                
+                # Получаем фото
+                photos = message['photo']
+                if photos and len(photos) > 0:
+                    photo_file_id = photos[-1]['file_id']
+                    
+                    # Объединяем данные видео и фото
+                    title, content = extract_title_and_content(video_data['text'])
+                    formatted_content = format_content_for_wp(content)
+                    
+                    post_key = str(int(time.time() * 1000))
+                    pending_posts[post_key] = {
+                        'original_text': video_data['text'],
+                        'media_file_id': photo_file_id,  # Фото для обложки
+                        'is_video': True,  # Это видео новость
+                        'title': title,
+                        'content': formatted_content,
+                        'video_file_id': video_data['video_file_id'],  # ID видео
+                        'gallery_file_ids': [photo_file_id]  # Фото в галерею
+                    }
+                    
+                    # Удаляем из ожидания
+                    del video_awaiting_photo[chat_id]
+                    
+                    # Показываем выбор раздела
+                    keyboard = {
+                        "inline_keyboard": []
+                    }
+                    for pt_key, pt_name in POST_TYPES.items():
+                        keyboard["inline_keyboard"].append([{"text": pt_name, "callback_data": f"select_post_type|{post_key}|{pt_key}"}])
+                    
+                    tg_send_message(
+                        chat_id,
+                        f"🎬 Видео с фото получено!\n\n"
+                        f"📌 {title}\n\n"
+                        f"📝 {content[:300]}...\n\n"
+                        f"📂 Выбери раздел для публикации:",
+                        json.dumps(keyboard)
+                    )
+                    logger.info(f"✅ Видео + фото объединены в пост {post_key}")
+                    return
+            
+            # Обработка альбомов (без изменений)
             if media_group_id and has_photo:
                 photos = message['photo']
                 if photos and len(photos) > 0:
@@ -1039,6 +1141,32 @@ def process_update(update_json):
                     logger.info(f"⏳ Запущен таймер для группы {media_group_id} на 3 секунды")
                 return
             
+            # НОВАЯ ЛОГИКА: Обработка видео
+            if has_video:
+                video_file_id = message['video']['file_id']
+                
+                # Проверяем, есть ли текст
+                if not text:
+                    tg_send_message(chat_id, "❌ Отправьте текст новости вместе с видео.\nПервая строка будет заголовком.")
+                    return
+                
+                # Сохраняем данные видео и ожидаем фото
+                video_awaiting_photo[chat_id] = {
+                    'video_file_id': video_file_id,
+                    'text': text
+                }
+                
+                # Запрашиваем фото
+                tg_send_message(
+                    chat_id,
+                    "📸 Теперь отправьте ФОТО для этой новости.\n"
+                    "Оно будет использовано как обложка и прикреплено к новости.\n\n"
+                    "Отправьте фото отдельным сообщением."
+                )
+                logger.info(f"🎬 Получено видео, ожидаем фото от {chat_id}")
+                return
+            
+            # Обработка обычных фото (без изменений)
             if has_photo and not media_group_id:
                 photos = message['photo']
                 if photos and len(photos) > 0:
@@ -1048,14 +1176,11 @@ def process_update(update_json):
                 else:
                     media_file_id = None
                     is_video = False
-            elif has_video:
-                media_file_id = message['video']['file_id']
-                is_video = True
-                logger.info("🎬 Обнаружено ВИДЕО")
             else:
                 media_file_id = None
                 is_video = False
             
+            # Обработка текста без медиа
             if not text and media_file_id:
                 tg_send_message(chat_id, "❌ Отправьте текст новости.\nПервая строка будет заголовком.")
                 return
@@ -1063,6 +1188,7 @@ def process_update(update_json):
             if not text:
                 return
             
+            # Создание поста для фото (без изменений)
             title, content = extract_title_and_content(text)
             formatted_content = format_content_for_wp(content)
             
@@ -1073,7 +1199,7 @@ def process_update(update_json):
                 'is_video': is_video,
                 'title': title,
                 'content': formatted_content,
-                'video_file_id': media_file_id if is_video else None,
+                'video_file_id': None,
                 'gallery_file_ids': []
             }
             
@@ -1099,63 +1225,6 @@ def process_update(update_json):
         logger.error(f"Ошибка: {e}")
         import traceback
         traceback.print_exc()
-
-def process_media_group(media_group_id):
-    """Обработка собранной медиа-группы (альбома)"""
-    if media_group_id not in media_groups:
-        return
-    
-    group_data = media_groups[media_group_id]
-    chat_id = group_data.get('chat_id')
-    
-    if not group_data.get('text'):
-        tg_send_message(chat_id, "❌ Отправьте текст новости.\nПервая строка будет заголовком.")
-        del media_groups[media_group_id]
-        return
-    
-    media_file_ids = group_data.get('file_ids', [])
-    text = group_data.get('text', '')
-    
-    if not media_file_ids:
-        tg_send_message(chat_id, "❌ Нет медиа для публикации.")
-        del media_groups[media_group_id]
-        return
-    
-    logger.info(f"📸 Обработка группы {media_group_id}: {len(media_file_ids)} файлов")
-    
-    title, content = extract_title_and_content(text)
-    formatted_content = format_content_for_wp(content)
-    
-    post_key = str(int(time.time() * 1000))
-    
-    pending_posts[post_key] = {
-        'original_text': text,
-        'media_file_id': media_file_ids[0] if media_file_ids else None,
-        'is_video': False,
-        'title': title,
-        'content': formatted_content,
-        'gallery_file_ids': media_file_ids[1:] if len(media_file_ids) > 1 else []
-    }
-    
-    keyboard = {
-        "inline_keyboard": []
-    }
-    for pt_key, pt_name in POST_TYPES.items():
-        keyboard["inline_keyboard"].append([{"text": pt_name, "callback_data": f"select_post_type|{post_key}|{pt_key}"}])
-    
-    tg_send_message(
-        chat_id,
-        f"📸 Альбом получен! ({len(media_file_ids)} фото)\n\n"
-        f"📌 {title}\n\n"
-        f"📝 {content[:300]}...\n\n"
-        f"📂 Выбери раздел для публикации:",
-        json.dumps(keyboard)
-    )
-    
-    if media_group_id in media_groups:
-        del media_groups[media_group_id]
-    if media_group_id in group_timers:
-        del group_timers[media_group_id]
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
