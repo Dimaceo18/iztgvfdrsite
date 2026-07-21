@@ -120,32 +120,14 @@ media_groups = defaultdict(dict)
 group_timers = {}
 scheduled_posts = {}
 scheduled_timers = {}
-video_awaiting_photo = {}
+video_awaiting_photo = {}  # Хранит данные видео, ожидающие фото
 
 # Базовый URL для Telegram API
 TG_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
-# НОВЫЙ ПРОМТ - ТОЛЬКО РЕДАКТИРУЕТ, НЕ МЕНЯЕТ СМЫСЛ
-DEEPSEEK_PROMPT = """Ты редактор новостного сайта. Отредактируй текст, НО СОХРАНИ ПОЛНОСТЬЮ ВСЕ ФАКТЫ, ЦИФРЫ, ДАТЫ, ИМЕНА И НАЗВАНИЯ.
+DEEPSEEK_PROMPT = """Ты редактор новостного сайта. Перепиши новость в строгом городском формате, объемом около 650 символов. Убери лишнюю воду, сделай интересный заголовок, никаких смайликов. Не используй символы # и ** в ответе. Сохрани главные факты. Расставь абзацы.
 
-ЗАДАЧИ:
-1. Исправь грамматические и пунктуационные ошибки.
-2. Убери повторы и лишние слова ("воду").
-3. Сделай текст более читаемым и структурированным.
-4. Расставь логичные абзацы.
-5. Сделай заголовок более цепляющим, НО не меняй суть.
-
-СТРОГО ЗАПРЕЩАЕТСЯ:
-- Менять факты, даты, время, места
-- Менять цифры и статистику
-- Менять имена людей и названия организаций
-- Добавлять информацию, которой нет в оригинале
-- Удалять важные детали
-- Менять смысл высказываний
-
-ВАЖНО: Ты должен сохранить СМЫСЛ каждого предложения. Только исправляй ошибки и убирай лишнее.
-
-НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом отредактированный текст."""
+ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст."""
 
 def get_category_id(post_type, category_slug):
     """Получить ID категории из словаря"""
@@ -169,6 +151,7 @@ def set_post_categories(post_id, post_type, category_ids):
         logger.info(f"   Таксономия: {taxonomy}")
         logger.info(f"   ID рубрик: {category_ids}")
         
+        # Добавляем рубрики через POST к термину
         success_count = 0
         for cat_id in category_ids:
             try:
@@ -394,14 +377,10 @@ def process_text_with_deepseek(text):
             json={
                 "model": "deepseek-chat",
                 "messages": [
-                    {"role": "system", "content": """Ты редактор новостного сайта. 
-                    Твоя задача - ТОЛЬКО редактировать текст: исправлять ошибки, убирать повторы, улучшать читаемость.
-                    НИ В КОЕМ СЛУЧАЕ не меняй факты, даты, имена, цифры и смысл текста.
-                    Сохраняй ВСЕ детали оригинала.
-                    Если сомневаешься - оставь как есть."""},
+                    {"role": "system", "content": "Ты редактор новостного сайта. Отвечай только готовым новостным текстом, без пояснений и вступлений. Не используй символы # и ** в ответе."},
                     {"role": "user", "content": f"{DEEPSEEK_PROMPT}\n\n{text}"}
                 ],
-                "temperature": 0.3,
+                "temperature": 0.7,
                 "max_tokens": 1000
             },
             timeout=60
@@ -478,6 +457,7 @@ def download_and_upload_photo(file_id, is_video=False, is_thumbnail=False, title
         
         logger.info(f"📸 Загружаю {media_type} в WordPress как: {filename}")
         
+        # ⚠️ РАБОЧИЙ МЕТОД ЗАГРУЗКИ - НЕ МЕНЯТЬ! ⚠️
         wp_headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Accept': 'application/json',
@@ -633,10 +613,12 @@ def publish_scheduled_post(post_key):
         gallery_ids = []
         media_id = featured_media_id
         
+        # Загружаем ВИДЕО (оно будет в контенте)
         if is_video and video_file_id:
             logger.info(f"🎬 Загрузка видео...")
             video_media_id = download_and_upload_photo(video_file_id, is_video=True, title=title)
             if video_media_id:
+                # Получаем URL видео для вставки в контент
                 try:
                     video_info = wp_session.get(
                         f"{WP_MEDIA_URL}/{video_media_id}",
@@ -653,6 +635,7 @@ def publish_scheduled_post(post_key):
             else:
                 logger.error("❌ Не удалось загрузить видео")
         
+        # Загружаем ФОТО для галереи/обложки
         for file_id in gallery_file_ids:
             if file_id != video_file_id:
                 logger.info(f"📸 Загрузка фото для галереи...")
@@ -666,9 +649,9 @@ def publish_scheduled_post(post_key):
             content,
             post_type,
             category_slug,
-            media_id,
+            media_id,  # Обложка (если есть)
             True,
-            video_url,
+            video_url,  # URL видео для вставки в контент
             is_video,
             gallery_ids if gallery_ids else None,
             None
@@ -884,11 +867,11 @@ def process_update(update_json):
                     'content': post_data['content'],
                     'post_type': post_data['post_type'],
                     'category_slug': post_data.get('category_slug'),
-                    'media_file_id': post_data.get('media_file_id'),
+                    'media_file_id': post_data.get('media_file_id'),  # Фото для обложки
                     'is_video': post_data.get('is_video', False),
                     'chat_id': chat_id,
                     'msg_id': msg_id,
-                    'featured_media_id': post_data.get('media_file_id'),
+                    'featured_media_id': post_data.get('media_file_id'),  # Фото как обложка
                     'video_file_id': post_data.get('video_file_id'),
                     'gallery_file_ids': post_data.get('gallery_file_ids', [])
                 }
@@ -954,8 +937,8 @@ def process_update(update_json):
                 tg_send_message(chat_id, "⏳ Публикую на сайт...")
                 
                 is_video = post_data.get('is_video', False)
-                media_file_id = post_data.get('media_file_id')
-                video_file_id = post_data.get('video_file_id')
+                media_file_id = post_data.get('media_file_id')  # Фото для обложки
+                video_file_id = post_data.get('video_file_id')  # ID видео
                 gallery_file_ids = post_data.get('gallery_file_ids', [])
                 title = post_data.get('title', '')
                 post_type = post_data.get('post_type', 'news')
@@ -966,6 +949,7 @@ def process_update(update_json):
                 gallery_ids = []
                 featured_media_id = None
                 
+                # 1. Загружаем ВИДЕО (будет вставлено в контент)
                 if is_video and video_file_id:
                     logger.info(f"🎬 Загрузка видео...")
                     video_media_id = download_and_upload_photo(video_file_id, is_video=True, title=title)
@@ -986,6 +970,7 @@ def process_update(update_json):
                     else:
                         logger.warning("⚠️ Видео не загрузилось")
                 
+                # 2. Загружаем ФОТО для обложки
                 if media_file_id:
                     logger.info(f"📸 Загрузка фото для обложки...")
                     featured_media_id = download_and_upload_photo(media_file_id, is_video=False, title=title)
@@ -994,6 +979,7 @@ def process_update(update_json):
                     else:
                         logger.warning("⚠️ Фото для обложки не загрузилось")
                 
+                # 3. Загружаем остальные фото для галереи
                 for file_id in gallery_file_ids:
                     if file_id != video_file_id:
                         logger.info(f"📸 Загрузка фото для галереи...")
@@ -1007,9 +993,9 @@ def process_update(update_json):
                     content,
                     post_type,
                     category_slug,
-                    featured_media_id,
+                    featured_media_id,  # Обложка - это ФОТО
                     True,
-                    video_url,
+                    video_url,  # URL видео для вставки в контент
                     is_video,
                     gallery_ids if gallery_ids else None,
                     None
@@ -1039,8 +1025,8 @@ def process_update(update_json):
                 tg_send_message(chat_id, "⏳ Сохраняю в черновики...")
                 
                 is_video = post_data.get('is_video', False)
-                media_file_id = post_data.get('media_file_id')
-                video_file_id = post_data.get('video_file_id')
+                media_file_id = post_data.get('media_file_id')  # Фото для обложки
+                video_file_id = post_data.get('video_file_id')  # ID видео
                 gallery_file_ids = post_data.get('gallery_file_ids', [])
                 title = post_data.get('title', '')
                 post_type = post_data.get('post_type', 'news')
@@ -1051,6 +1037,7 @@ def process_update(update_json):
                 gallery_ids = []
                 featured_media_id = None
                 
+                # 1. Загружаем ВИДЕО (будет вставлено в контент)
                 if is_video and video_file_id:
                     logger.info(f"🎬 Загрузка видео...")
                     video_media_id = download_and_upload_photo(video_file_id, is_video=True, title=title)
@@ -1071,6 +1058,7 @@ def process_update(update_json):
                     else:
                         logger.warning("⚠️ Видео не загрузилось")
                 
+                # 2. Загружаем ФОТО для обложки
                 if media_file_id:
                     logger.info(f"📸 Загрузка фото для обложки...")
                     featured_media_id = download_and_upload_photo(media_file_id, is_video=False, title=title)
@@ -1079,6 +1067,7 @@ def process_update(update_json):
                     else:
                         logger.warning("⚠️ Фото для обложки не загрузилось")
                 
+                # 3. Загружаем остальные фото для галереи
                 for file_id in gallery_file_ids:
                     if file_id != video_file_id:
                         logger.info(f"📸 Загрузка фото для галереи...")
@@ -1092,9 +1081,9 @@ def process_update(update_json):
                     content,
                     post_type,
                     category_slug,
-                    featured_media_id,
+                    featured_media_id,  # Обложка - это ФОТО
                     False,
-                    video_url,
+                    video_url,  # URL видео для вставки в контент
                     is_video,
                     gallery_ids if gallery_ids else None,
                     None
@@ -1124,29 +1113,35 @@ def process_update(update_json):
             has_photo = 'photo' in message
             has_video = 'video' in message
             
+            # НОВАЯ ЛОГИКА: Проверяем, ожидаем ли мы фото для видео
             if has_photo and chat_id in video_awaiting_photo:
+                # Получаем данные ожидающего видео
                 video_data = video_awaiting_photo[chat_id]
                 
+                # Получаем фото
                 photos = message['photo']
                 if photos and len(photos) > 0:
                     photo_file_id = photos[-1]['file_id']
                     
+                    # Объединяем данные видео и фото
                     title, content = extract_title_and_content(video_data['text'])
                     formatted_content = format_content_for_wp(content)
                     
                     post_key = str(int(time.time() * 1000))
                     pending_posts[post_key] = {
                         'original_text': video_data['text'],
-                        'media_file_id': photo_file_id,
-                        'is_video': True,
+                        'media_file_id': photo_file_id,  # Фото для обложки
+                        'is_video': True,  # Это видео новость
                         'title': title,
                         'content': formatted_content,
-                        'video_file_id': video_data['video_file_id'],
-                        'gallery_file_ids': [photo_file_id]
+                        'video_file_id': video_data['video_file_id'],  # ID видео
+                        'gallery_file_ids': [photo_file_id]  # Фото также будет в галерее
                     }
                     
+                    # Удаляем из ожидания
                     del video_awaiting_photo[chat_id]
                     
+                    # Показываем выбор раздела
                     keyboard = {
                         "inline_keyboard": []
                     }
@@ -1166,6 +1161,7 @@ def process_update(update_json):
                     logger.info(f"✅ Видео + фото объединены в пост {post_key}")
                     return
             
+            # Обработка альбомов (без изменений)
             if media_group_id and has_photo:
                 photos = message['photo']
                 if photos and len(photos) > 0:
@@ -1196,18 +1192,22 @@ def process_update(update_json):
                     logger.info(f"⏳ Запущен таймер для группы {media_group_id} на 3 секунды")
                 return
             
+            # НОВАЯ ЛОГИКА: Обработка видео
             if has_video:
                 video_file_id = message['video']['file_id']
                 
+                # Проверяем, есть ли текст
                 if not text:
                     tg_send_message(chat_id, "❌ Отправьте текст новости вместе с видео.\nПервая строка будет заголовком.")
                     return
                 
+                # Сохраняем данные видео и ожидаем фото
                 video_awaiting_photo[chat_id] = {
                     'video_file_id': video_file_id,
                     'text': text
                 }
                 
+                # Запрашиваем фото
                 tg_send_message(
                     chat_id,
                     "📸 Теперь отправьте ФОТО для этой новости.\n"
@@ -1218,6 +1218,7 @@ def process_update(update_json):
                 logger.info(f"🎬 Получено видео, ожидаем фото от {chat_id}")
                 return
             
+            # Обработка обычных фото (без изменений)
             if has_photo and not media_group_id:
                 photos = message['photo']
                 if photos and len(photos) > 0:
@@ -1231,6 +1232,7 @@ def process_update(update_json):
                 media_file_id = None
                 is_video = False
             
+            # Обработка текста без медиа
             if not text and media_file_id:
                 tg_send_message(chat_id, "❌ Отправьте текст новости.\nПервая строка будет заголовком.")
                 return
@@ -1238,6 +1240,7 @@ def process_update(update_json):
             if not text:
                 return
             
+            # Создание поста для фото (без изменений)
             title, content = extract_title_and_content(text)
             formatted_content = format_content_for_wp(content)
             
