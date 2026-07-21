@@ -120,32 +120,31 @@ media_groups = defaultdict(dict)
 group_timers = {}
 scheduled_posts = {}
 scheduled_timers = {}
-video_awaiting_photo = {}  # Хранит данные видео, ожидающие фото
+video_awaiting_photo = {}
 
 # Базовый URL для Telegram API
 TG_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
-# ОБНОВЛЕННЫЙ ПРОМТ С ПРОВЕРКОЙ ДАТЫ, ВРЕМЕНИ И МЕСТА
+# ОБНОВЛЕННЫЙ ПРОМТ - ТОЛЬКО СОХРАНЯЕТ ДАННЫЕ ИЗ ОРИГИНАЛА
 DEEPSEEK_PROMPT = """Ты редактор новостного сайта. Перепиши новость в строгом городском формате, объемом около 650 символов.
 
-КРИТИЧЕСКИ ВАЖНЫЕ ПРАВИЛА:
-1. ВСЕГДА проверяй и сохраняй ДАТУ и ВРЕМЯ из исходного текста. Если дата не указана - используй сегодняшнюю дату.
-2. ВСЕГДА проверяй и сохраняй МЕСТО (город, страну, место события) из исходного текста.
-3. Никогда не меняй дату, время и место события. Сохраняй их в точности как в оригинале.
+ВАЖНЫЕ ПРАВИЛА:
+1. Сохраняй ВСЕ даты, время и места из исходного текста в ТОЧНОСТИ как в оригинале.
+2. НЕ добавляй даты, время и места, которых нет в исходном тексте.
+3. НЕ меняй формат дат - оставляй как в оригинале.
 4. Убери лишнюю "воду" и повторы.
 5. Сделай интересный, цепляющий заголовок.
 6. НИКАКИХ смайликов в тексте.
 7. Не используй символы # и ** в ответе.
 8. Сохрани все главные факты и цифры.
 9. Расставь логичные абзацы.
-10. Проверь, чтобы все даты, время и места были указаны корректно и не противоречили оригиналу.
 
 ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст новости.
 
 Пример правильного формата:
 В Минске открылся новый торговый центр
 
-Сегодня, 21 июля 2026 года, в Минске на улице Притыцкого состоялось торжественное открытие нового торгово-развлекательного центра "Галактика". Мероприятие началось в 10:00 и собрало более 500 гостей..."""
+На улице Притыцкого в Минске состоялось торжественное открытие нового торгово-развлекательного центра "Галактика". Мероприятие началось в 10:00 и собрало более 500 гостей..."""
 
 def get_category_id(post_type, category_slug):
     """Получить ID категории из словаря"""
@@ -169,7 +168,6 @@ def set_post_categories(post_id, post_type, category_ids):
         logger.info(f"   Таксономия: {taxonomy}")
         logger.info(f"   ID рубрик: {category_ids}")
         
-        # Добавляем рубрики через POST к термину
         success_count = 0
         for cat_id in category_ids:
             try:
@@ -389,21 +387,15 @@ def process_text_with_deepseek(text):
     if not DEEPSEEK_API_KEY:
         return None
     try:
-        # Добавляем текущую дату в контекст для ИИ
-        current_date = datetime.now().strftime('%d.%m.%Y')
-        current_time = datetime.now().strftime('%H:%M')
-        
         response = requests.post(
             DEEPSEEK_API_URL,
             headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"},
             json={
                 "model": "deepseek-chat",
                 "messages": [
-                    {"role": "system", "content": f"""Ты редактор новостного сайта. Отвечай только готовым новостным текстом, без пояснений и вступлений. 
+                    {"role": "system", "content": """Ты редактор новостного сайта. Отвечай только готовым новостным текстом, без пояснений и вступлений. 
                     Не используй символы # и ** в ответе.
-                    Сегодня: {current_date}, текущее время: {current_time}.
-                    ВСЕГДА проверяй и сохраняй дату, время и место события из исходного текста. Если в тексте есть указания на дату/время/место - сохраняй их точно.
-                    Если дата не указана - используй сегодняшнюю дату."""},
+                    КРИТИЧЕСКИ ВАЖНО: Сохраняй все даты, время и места ИЗ ИСХОДНОГО ТЕКСТА. НЕ добавляй то, чего нет в оригинале."""},
                     {"role": "user", "content": f"{DEEPSEEK_PROMPT}\n\n{text}"}
                 ],
                 "temperature": 0.7,
@@ -416,12 +408,6 @@ def process_text_with_deepseek(text):
             result = re.sub(r'^Вот обработанный новостной текст.*?:', '', result, flags=re.IGNORECASE)
             result = re.sub(r'^Вот.*?текст.*?:', '', result, flags=re.IGNORECASE)
             result = re.sub(r'^#+\s+', '', result, flags=re.MULTILINE)
-            
-            # Дополнительная проверка: если в тексте есть слова "сегодня" или "вчера" - проверяем контекст
-            # Это помогает сохранить временные привязки
-            if 'сегодня' in result.lower() or 'вчера' in result.lower() or 'завтра' in result.lower():
-                logger.info("📅 В тексте обнаружены временные маркеры")
-            
             return result.strip()
         return None
     except Exception as e:
@@ -489,7 +475,6 @@ def download_and_upload_photo(file_id, is_video=False, is_thumbnail=False, title
         
         logger.info(f"📸 Загружаю {media_type} в WordPress как: {filename}")
         
-        # ⚠️ РАБОЧИЙ МЕТОД ЗАГРУЗКИ - НЕ МЕНЯТЬ! ⚠️
         wp_headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Accept': 'application/json',
@@ -645,7 +630,6 @@ def publish_scheduled_post(post_key):
         gallery_ids = []
         media_id = featured_media_id
         
-        # Загружаем ВИДЕО (оно будет в контенте)
         if is_video and video_file_id:
             logger.info(f"🎬 Загрузка видео...")
             video_media_id = download_and_upload_photo(video_file_id, is_video=True, title=title)
@@ -666,7 +650,6 @@ def publish_scheduled_post(post_key):
             else:
                 logger.error("❌ Не удалось загрузить видео")
         
-        # Загружаем ФОТО для галереи/обложки
         for file_id in gallery_file_ids:
             if file_id != video_file_id:
                 logger.info(f"📸 Загрузка фото для галереи...")
@@ -980,7 +963,6 @@ def process_update(update_json):
                 gallery_ids = []
                 featured_media_id = None
                 
-                # 1. Загружаем ВИДЕО
                 if is_video and video_file_id:
                     logger.info(f"🎬 Загрузка видео...")
                     video_media_id = download_and_upload_photo(video_file_id, is_video=True, title=title)
@@ -1001,7 +983,6 @@ def process_update(update_json):
                     else:
                         logger.warning("⚠️ Видео не загрузилось")
                 
-                # 2. Загружаем ФОТО для обложки
                 if media_file_id:
                     logger.info(f"📸 Загрузка фото для обложки...")
                     featured_media_id = download_and_upload_photo(media_file_id, is_video=False, title=title)
@@ -1010,7 +991,6 @@ def process_update(update_json):
                     else:
                         logger.warning("⚠️ Фото для обложки не загрузилось")
                 
-                # 3. Загружаем остальные фото для галереи
                 for file_id in gallery_file_ids:
                     if file_id != video_file_id:
                         logger.info(f"📸 Загрузка фото для галереи...")
@@ -1068,7 +1048,6 @@ def process_update(update_json):
                 gallery_ids = []
                 featured_media_id = None
                 
-                # 1. Загружаем ВИДЕО
                 if is_video and video_file_id:
                     logger.info(f"🎬 Загрузка видео...")
                     video_media_id = download_and_upload_photo(video_file_id, is_video=True, title=title)
@@ -1089,7 +1068,6 @@ def process_update(update_json):
                     else:
                         logger.warning("⚠️ Видео не загрузилось")
                 
-                # 2. Загружаем ФОТО для обложки
                 if media_file_id:
                     logger.info(f"📸 Загрузка фото для обложки...")
                     featured_media_id = download_and_upload_photo(media_file_id, is_video=False, title=title)
@@ -1098,7 +1076,6 @@ def process_update(update_json):
                     else:
                         logger.warning("⚠️ Фото для обложки не загрузилось")
                 
-                # 3. Загружаем остальные фото для галереи
                 for file_id in gallery_file_ids:
                     if file_id != video_file_id:
                         logger.info(f"📸 Загрузка фото для галереи...")
@@ -1144,7 +1121,6 @@ def process_update(update_json):
             has_photo = 'photo' in message
             has_video = 'video' in message
             
-            # Проверяем, ожидаем ли мы фото для видео
             if has_photo and chat_id in video_awaiting_photo:
                 video_data = video_awaiting_photo[chat_id]
                 
@@ -1187,7 +1163,6 @@ def process_update(update_json):
                     logger.info(f"✅ Видео + фото объединены в пост {post_key}")
                     return
             
-            # Обработка альбомов
             if media_group_id and has_photo:
                 photos = message['photo']
                 if photos and len(photos) > 0:
@@ -1218,7 +1193,6 @@ def process_update(update_json):
                     logger.info(f"⏳ Запущен таймер для группы {media_group_id} на 3 секунды")
                 return
             
-            # Обработка видео
             if has_video:
                 video_file_id = message['video']['file_id']
                 
@@ -1241,7 +1215,6 @@ def process_update(update_json):
                 logger.info(f"🎬 Получено видео, ожидаем фото от {chat_id}")
                 return
             
-            # Обработка обычных фото
             if has_photo and not media_group_id:
                 photos = message['photo']
                 if photos and len(photos) > 0:
@@ -1255,7 +1228,6 @@ def process_update(update_json):
                 media_file_id = None
                 is_video = False
             
-            # Обработка текста без медиа
             if not text and media_file_id:
                 tg_send_message(chat_id, "❌ Отправьте текст новости.\nПервая строка будет заголовком.")
                 return
