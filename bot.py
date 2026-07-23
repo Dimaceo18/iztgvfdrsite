@@ -600,58 +600,82 @@ def publish_scheduled_post(post_key):
     logger.info(f"⏰ Время публикации для поста {post_key}!")
     
     try:
-        is_video = post_data.get('is_video', False)
+        # 🔥 ИСПРАВЛЕНИЕ: Используем уже загруженные ID, если они есть
         featured_media_id = post_data.get('featured_media_id')
-        video_file_id = post_data.get('video_file_id')
-        gallery_file_ids = post_data.get('gallery_file_ids', [])
+        video_media_id = post_data.get('video_media_id')  # ID видео в WordPress
+        gallery_ids = post_data.get('gallery_ids', [])  # Список ID фото в WordPress
+        
         title = post_data.get('title', '')
         post_type = post_data.get('post_type', 'news')
         content = post_data.get('content', '')
         category_slug = post_data.get('category_slug')
+        is_video = post_data.get('is_video', False)
         
         video_url = None
-        gallery_ids = []
-        media_id = featured_media_id
         
-        # Загружаем ВИДЕО (оно будет в контенте)
-        if is_video and video_file_id:
-            logger.info(f"🎬 Загрузка видео...")
-            video_media_id = download_and_upload_photo(video_file_id, is_video=True, title=title)
-            if video_media_id:
-                # Получаем URL видео для вставки в контент
-                try:
-                    video_info = wp_session.get(
-                        f"{WP_MEDIA_URL}/{video_media_id}",
-                        auth=(WP_USERNAME, WP_PASSWORD),
-                        timeout=30
-                    )
-                    if video_info.status_code == 200:
-                        video_url = video_info.json().get('source_url')
-                        logger.info(f"✅ Видео загружено, URL: {video_url}")
-                    else:
-                        logger.error(f"❌ Не удалось получить URL видео")
-                except Exception as e:
-                    logger.error(f"❌ Ошибка получения URL видео: {e}")
-            else:
-                logger.error("❌ Не удалось загрузить видео")
+        # Получаем URL видео если есть ID
+        if is_video and video_media_id:
+            try:
+                video_info = wp_session.get(
+                    f"{WP_MEDIA_URL}/{video_media_id}",
+                    auth=(WP_USERNAME, WP_PASSWORD),
+                    timeout=30
+                )
+                if video_info.status_code == 200:
+                    video_url = video_info.json().get('source_url')
+                    logger.info(f"✅ Видео уже загружено, URL: {video_url}")
+                else:
+                    logger.error(f"❌ Не удалось получить URL видео по ID {video_media_id}")
+            except Exception as e:
+                logger.error(f"❌ Ошибка получения URL видео: {e}")
         
-        # Загружаем ФОТО для галереи/обложки
-        for file_id in gallery_file_ids:
-            if file_id != video_file_id:
-                logger.info(f"📸 Загрузка фото для галереи...")
-                photo_id = download_and_upload_photo(file_id, is_video=False, title=title)
-                if photo_id:
-                    gallery_ids.append(photo_id)
-                    logger.info(f"✅ Фото загружено, ID={photo_id}")
+        # Если нет ID видео, но есть file_id - загружаем заново
+        if is_video and not video_media_id:
+            video_file_id = post_data.get('video_file_id')
+            if video_file_id:
+                logger.info(f"🎬 Загрузка видео из file_id...")
+                video_media_id = download_and_upload_photo(video_file_id, is_video=True, title=title)
+                if video_media_id:
+                    try:
+                        video_info = wp_session.get(
+                            f"{WP_MEDIA_URL}/{video_media_id}",
+                            auth=(WP_USERNAME, WP_PASSWORD),
+                            timeout=30
+                        )
+                        if video_info.status_code == 200:
+                            video_url = video_info.json().get('source_url')
+                            logger.info(f"✅ Видео загружено, URL: {video_url}")
+                    except Exception as e:
+                        logger.error(f"❌ Ошибка получения URL видео: {e}")
+        
+        # Проверяем наличие обложки
+        if not featured_media_id:
+            # Если нет ID обложки, но есть file_id - загружаем
+            media_file_id = post_data.get('media_file_id')
+            if media_file_id:
+                logger.info(f"📸 Загрузка обложки из file_id...")
+                featured_media_id = download_and_upload_photo(media_file_id, is_video=False, title=title)
+                if featured_media_id:
+                    logger.info(f"✅ Обложка загружена ID={featured_media_id}")
+        
+        # Проверяем наличие фото в галерее
+        if not gallery_ids and post_data.get('gallery_file_ids'):
+            logger.info(f"📸 Загрузка фото для галереи...")
+            for file_id in post_data.get('gallery_file_ids', []):
+                if file_id != post_data.get('video_file_id'):
+                    photo_id = download_and_upload_photo(file_id, is_video=False, title=title)
+                    if photo_id:
+                        gallery_ids.append(photo_id)
+                        logger.info(f"✅ Фото загружено ID={photo_id}")
         
         success, link = create_wp_post(
             title,
             content,
             post_type,
             category_slug,
-            media_id,  # Обложка (если есть)
+            featured_media_id,
             True,
-            video_url,  # URL видео для вставки в контент
+            video_url,
             is_video,
             gallery_ids if gallery_ids else None,
             None
@@ -859,21 +883,66 @@ def process_update(update_json):
                     tg_send_message(chat_id, "❌ Раздел не выбран.")
                     return
                 
+                # 🔥 ИСПРАВЛЕНИЕ: Загружаем медиа ДО сохранения в планировщик
+                tg_send_message(chat_id, "⏳ Загружаю медиа в WordPress...")
+                
+                is_video = post_data.get('is_video', False)
+                media_file_id = post_data.get('media_file_id')
+                video_file_id = post_data.get('video_file_id')
+                gallery_file_ids = post_data.get('gallery_file_ids', [])
+                title = post_data.get('title', '')
+                
+                featured_media_id = None
+                video_media_id = None
+                gallery_ids = []
+                
+                # 1. Загружаем ВИДЕО
+                if is_video and video_file_id:
+                    logger.info(f"🎬 Загрузка видео для планирования...")
+                    video_media_id = download_and_upload_photo(video_file_id, is_video=True, title=title)
+                    if video_media_id:
+                        logger.info(f"✅ Видео загружено ID={video_media_id}")
+                    else:
+                        logger.warning("⚠️ Видео не загрузилось")
+                
+                # 2. Загружаем ОБЛОЖКУ (если есть)
+                if media_file_id:
+                    logger.info(f"📸 Загрузка обложки для планирования...")
+                    featured_media_id = download_and_upload_photo(media_file_id, is_video=False, title=title)
+                    if featured_media_id:
+                        logger.info(f"✅ Обложка загружена ID={featured_media_id}")
+                    else:
+                        logger.warning("⚠️ Обложка не загрузилась")
+                
+                # 3. Загружаем фото для галереи
+                for file_id in gallery_file_ids:
+                    if file_id != video_file_id:
+                        logger.info(f"📸 Загрузка фото для галереи...")
+                        photo_id = download_and_upload_photo(file_id, is_video=False, title=title)
+                        if photo_id:
+                            gallery_ids.append(photo_id)
+                            logger.info(f"✅ Фото загружено ID={photo_id}")
+                
                 schedule_time = datetime.now() + timedelta(minutes=minutes)
                 time_str = schedule_time.strftime('%d.%m.%Y %H:%M')
                 
+                # 🔥 ИСПРАВЛЕНИЕ: Сохраняем ID из WordPress, а не file_id
                 scheduled_posts[post_key] = {
                     'title': post_data['title'],
                     'content': post_data['content'],
                     'post_type': post_data['post_type'],
                     'category_slug': post_data.get('category_slug'),
-                    'media_file_id': post_data.get('media_file_id'),  # Фото для обложки
-                    'is_video': post_data.get('is_video', False),
                     'chat_id': chat_id,
                     'msg_id': msg_id,
-                    'featured_media_id': post_data.get('media_file_id'),  # Фото как обложка
-                    'video_file_id': post_data.get('video_file_id'),
-                    'gallery_file_ids': post_data.get('gallery_file_ids', [])
+                    'is_video': is_video,
+                    # Сохраняем WordPress ID вместо Telegram file_id
+                    'featured_media_id': featured_media_id,  # ID обложки в WP
+                    'video_media_id': video_media_id,  # ID видео в WP
+                    'gallery_ids': gallery_ids,  # ID фото в WP
+                    # Сохраняем file_id на случай, если понадобится перезагрузить
+                    'media_file_id': media_file_id,
+                    'video_file_id': video_file_id,
+                    'gallery_file_ids': gallery_file_ids
                 }
                 
                 timer = threading.Timer(minutes * 60, publish_scheduled_post, args=[post_key])
@@ -887,11 +956,12 @@ def process_update(update_json):
                     f"✅ Пост запланирован!\n\n"
                     f"⏰ Публикация: {time_str}\n"
                     f"📂 Раздел: {POST_TYPES.get(post_data['post_type'], post_data['post_type'])}\n"
-                    f"📝 Заголовок: {post_data['title']}\n\n"
+                    f"📝 Заголовок: {post_data['title']}\n"
+                    f"📸 Медиа: {len(gallery_ids) + (1 if featured_media_id else 0)} файлов загружено\n\n"
                     f"🕐 Через {minutes} минут пост будет опубликован автоматически."
                 )
                 
-                logger.info(f"⏰ Пост {post_key} запланирован на {time_str}")
+                logger.info(f"⏰ Пост {post_key} запланирован на {time_str} с медиа ID: обложка={featured_media_id}, видео={video_media_id}, галерея={gallery_ids}")
                 return
             
             if action == 'ai' and len(parts) >= 2:
