@@ -960,7 +960,6 @@ def publish_scheduled_post(post_key):
         if success:
             tg_send_message(chat_id, f"✅ Пост опубликован по расписанию!\n\n{link}")
             
-            # Показываем предпросмотр перед публикацией в Telegram
             media_file_id = post_data.get('media_file_id')
             video_file_id = post_data.get('video_file_id')
             gallery_file_ids = post_data.get('gallery_file_ids', [])
@@ -1062,7 +1061,6 @@ def process_update(update_json):
             parts = data.split('|')
             action = parts[0]
             
-            # Обработка подтверждения публикации в Telegram
             if action == 'confirm_telegram' and len(parts) >= 2:
                 post_key = parts[1]
                 tg_send_message(chat_id, "⏳ Публикую в Telegram канал...")
@@ -1079,7 +1077,6 @@ def process_update(update_json):
                         pass
                 return
             
-            # Обработка отмены публикации в Telegram
             if action == 'cancel_telegram' and len(parts) >= 2:
                 post_key = parts[1]
                 if post_key in telegram_preview:
@@ -1362,7 +1359,6 @@ def process_update(update_json):
                 if success:
                     tg_send_message(chat_id, f"✅ Пост опубликован на сайте!\n\n{link}")
                     
-                    # Показываем предпросмотр перед публикацией в Telegram
                     logger.info(f"📢 Показываем предпросмотр для Telegram...")
                     preview_telegram_post(
                         title=title,
@@ -1585,7 +1581,8 @@ def process_update(update_json):
                     media_file_id = None
                     is_video = False
             else:
-                media_file_id = None                is_video = False
+                media_file_id = None
+                is_video = False
             
             if not text and media_file_id:
                 tg_send_message(chat_id, "❌ Отправьте текст новости.\nПервая строка будет заголовком.")
