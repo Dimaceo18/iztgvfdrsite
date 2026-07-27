@@ -130,16 +130,18 @@ DEEPSEEK_PROMPT = """Ты редактор новостного сайта. Пе
 
 ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст."""
 
+TELEGRAM_SHORT_PROMPT = """Ты редактор новостного канала в Telegram. Сократи текст до 400 символов (максимум 400), сохранив всю суть и смысл. Убери лишнюю воду, оставь только главные факты. Сохрани абзацы. Не используй символы # и ** в ответе.
+
+ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши готовый текст для Telegram."""
+
 # ============ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ============
 
 def get_channel_id():
     """Получает правильный ID канала"""
     try:
-        # Если CHANNEL_ID уже начинается с -100, оставляем как есть
         if str(CHANNEL_ID).startswith('-100'):
             return CHANNEL_ID
         
-        # Пробуем получить информацию о канале
         url = f"{TG_API_URL}/getChat"
         params = {'chat_id': CHANNEL_ID}
         response = requests.get(url, params=params, timeout=30)
@@ -506,21 +508,29 @@ def format_content_for_wp(text, video_url=None, gallery_ids=None, is_video=False
     
     return '\n'.join(formatted)
 
-def process_text_with_deepseek(text):
+def process_text_with_deepseek(text, prompt_type='full'):
+    """Обработка текста через DeepSeek"""
     if not DEEPSEEK_API_KEY:
         return None
     try:
+        if prompt_type == 'telegram':
+            prompt = TELEGRAM_SHORT_PROMPT
+            system_prompt = "Ты редактор новостного канала в Telegram. Отвечай только готовым текстом для Telegram, без пояснений и вступлений. Не используй символы # и ** в ответе."
+        else:
+            prompt = DEEPSEEK_PROMPT
+            system_prompt = "Ты редактор новостного сайта. Отвечай только готовым новостным текстом, без пояснений и вступлений. Не используй символы # и ** в ответе."
+        
         response = requests.post(
             DEEPSEEK_API_URL,
             headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"},
             json={
                 "model": "deepseek-chat",
                 "messages": [
-                    {"role": "system", "content": "Ты редактор новостного сайта. Отвечай только готовым новостным текстом, без пояснений и вступлений. Не используй символы # и ** в ответе."},
-                    {"role": "user", "content": f"{DEEPSEEK_PROMPT}\n\n{text}"}
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"{prompt}\n\n{text}"}
                 ],
                 "temperature": 0.7,
-                "max_tokens": 1000
+                "max_tokens": 600 if prompt_type == 'telegram' else 1000
             },
             timeout=60
         )
@@ -639,7 +649,53 @@ def get_action_keyboard(post_key):
         ]
     }
 
-# ============ НОВЫЕ ФУНКЦИИ ДЛЯ TELEGRAM ============
+# ============ ФУНКЦИИ ДЛЯ TELEGRAM ============
+
+def clean_html_for_telegram(text):
+    """Очищает HTML теги и форматирует текст для Telegram, сохраняя абзацы"""
+    text = re.sub(r'<[^>]+>', '', text)
+    text = re.sub(r'\[video[^\]]*\]', '', text)
+    text = re.sub(r'\[gallery[^\]]*\]', '', text)
+    text = re.sub(r'\[[^\]]*\]', '', text)
+    text = re.sub(r'https?://[^\s]+', '', text)
+    text = re.sub(r'\n\s*\n', '\n\n', text)
+    text = text.strip()
+    return text
+
+def shorten_text_for_telegram(text):
+    """Сокращает текст для Telegram через ИИ до 400 символов"""
+    try:
+        if not DEEPSEEK_API_KEY:
+            logger.warning("⚠️ DeepSeek API ключ не найден, обрезаю текст вручную")
+            if len(text) > 400:
+                return text[:397] + "..."
+            return text
+        
+        # Очищаем текст от HTML
+        clean_text = clean_html_for_telegram(text)
+        
+        # Если текст уже короткий, не обрабатываем
+        if len(clean_text) <= 400:
+            logger.info(f"✅ Текст уже короткий ({len(clean_text)} символов), ИИ не используется")
+            return clean_text
+        
+        logger.info(f"🤖 Отправляю текст в ИИ для сокращения до 400 символов (было {len(clean_text)})")
+        shortened = process_text_with_deepseek(clean_text, prompt_type='telegram')
+        
+        if shortened and len(shortened) <= 450:
+            logger.info(f"✅ Текст сокращен ИИ до {len(shortened)} символов")
+            return shortened
+        else:
+            logger.warning(f"⚠️ ИИ вернул текст длиной {len(shortened) if shortened else 0}, обрезаю вручную")
+            if len(clean_text) > 400:
+                return clean_text[:397] + "..."
+            return clean_text
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка сокращения текста: {e}")
+        if len(text) > 400:
+            return text[:397] + "..."
+        return text
 
 def send_text_only_to_telegram(text):
     """Отправляет только текст в Telegram канал"""
@@ -665,7 +721,7 @@ def send_text_only_to_telegram(text):
         return False
 
 def publish_to_telegram_channel(title, content, post_link, media_file_id=None, video_file_id=None, gallery_file_ids=None):
-    """Публикует пост в Telegram канал"""
+    """Публикует пост в Telegram канал с сокращением текста до 400 символов"""
     try:
         logger.info(f"📢 Начинаю публикацию в Telegram канал...")
         
@@ -673,21 +729,13 @@ def publish_to_telegram_channel(title, content, post_link, media_file_id=None, v
             logger.error("❌ CHANNEL_ID не указан в переменных окружения")
             return False
         
-        # Получаем правильный ID канала
         chat_id = get_channel_id()
         logger.info(f"📢 Использую chat_id: {chat_id}")
         
-        clean_content = re.sub(r'<[^>]+>', '', content)
-        clean_content = re.sub(r'\[video[^\]]*\]', '', clean_content)
-        clean_content = re.sub(r'\[gallery[^\]]*\]', '', clean_content)
-        clean_content = re.sub(r'\[[^\]]*\]', '', clean_content)
-        clean_content = re.sub(r'https?://[^\s]+', '', clean_content)
-        clean_content = ' '.join(clean_content.split())
+        # Сокращаем текст для Telegram через ИИ
+        shortened_content = shorten_text_for_telegram(content)
         
-        if len(clean_content) > 1000:
-            clean_content = clean_content[:997] + "..."
-        
-        telegram_text = f"<b>{title}</b>\n\n{clean_content}\n\n<a href=\"{post_link}\">Подробнее: ссылка на статью</a>"
+        # Формируем текст с сохранением форматирования        telegram_text = f"<b>{title}</b>\n\n{shortened_content}\n\nПодробнее: {post_link}"
         
         if media_file_id:
             get_file_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile"
@@ -758,20 +806,13 @@ def preview_telegram_post(title, content, post_link, chat_id, post_key, media_fi
     try:
         logger.info(f"📢 Показываю предпросмотр для публикации в Telegram...")
         
-        clean_content = re.sub(r'<[^>]+>', '', content)
-        clean_content = re.sub(r'\[video[^\]]*\]', '', clean_content)
-        clean_content = re.sub(r'\[gallery[^\]]*\]', '', clean_content)
-        clean_content = re.sub(r'\[[^\]]*\]', '', clean_content)
-        clean_content = re.sub(r'https?://[^\s]+', '', clean_content)
-        clean_content = ' '.join(clean_content.split())
-        
-        if len(clean_content) > 1000:
-            clean_content = clean_content[:997] + "..."
+        # Сокращаем текст для Telegram через ИИ
+        shortened_content = shorten_text_for_telegram(content)
         
         preview_text = f"<b>📢 ПРЕДПРОСМОТР ПУБЛИКАЦИИ В КАНАЛ</b>\n\n"
         preview_text += f"<b>Заголовок:</b>\n{title}\n\n"
-        preview_text += f"<b>Текст:</b>\n{clean_content}\n\n"
-        preview_text += f"<b>Ссылка:</b>\n<a href=\"{post_link}\">Подробнее: ссылка на статью</a>\n\n"
+        preview_text += f"<b>Текст (сокращен до 400 символов):</b>\n{shortened_content}\n\n"
+        preview_text += f"<b>Ссылка:</b>\n{post_link}\n\n"
         preview_text += f"<i>⬇️ Нажмите кнопку ниже для публикации в канал</i>"
         
         telegram_preview[post_key] = {
@@ -1289,7 +1330,7 @@ def process_update(update_json):
                 
                 if post_data:
                     tg_send_message(chat_id, "🤖 Обрабатываю текст через ИИ...")
-                    processed = process_text_with_deepseek(post_data['original_text'])
+                    processed = process_text_with_deepseek(post_data['original_text'], prompt_type='full')
                     
                     if processed:
                         title, content = extract_title_and_content(processed)
