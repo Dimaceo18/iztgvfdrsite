@@ -130,14 +130,200 @@ DEEPSEEK_PROMPT = """Ты редактор новостного сайта. Пе
 
 ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст."""
 
-TELEGRAM_SHORT_PROMPT = """Ты редактор новостного канала в Telegram. Напиши краткую версию новости ровно 400 символов. Сохрани все главные факты и суть. Текст должен быть связным и логичным, заканчиваться законченной мыслью. Не используй троеточие, смайлики, символы # и **.
+TELEGRAM_SHORT_PROMPT = """Напиши краткую версию новости ровно на 400 символов. Сохрани все главные факты и суть. Текст должен быть связным, логичным и заканчиваться законченной мыслью.
 
-ВАЖНО:
+Важно:
 - Ровно 400 символов
-- Законченный текст
 - Без троеточия
+- Без смайликов
+- Без символов # и **
 - Без слов "Заголовок:" и "Текст:"
 - Только готовый текст"""
+
+# Словарь смайликов по тематикам
+EMOJI_CATEGORIES = {
+    # Новости и политика
+    "политика": "🏛️",
+    "власть": "🏛️",
+    "правительство": "🏛️",
+    "президент": "👤",
+    "выборы": "🗳️",
+    "закон": "⚖️",
+    "суд": "⚖️",
+    "решение": "📋",
+    "указ": "📜",
+    "постановление": "📜",
+    
+    # Экономика и финансы
+    "деньги": "💰",
+    "финансы": "💰",
+    "экономика": "📊",
+    "бюджет": "💰",
+    "цена": "💲",
+    "курс": "💱",
+    "валюта": "💱",
+    "налоги": "🧾",
+    "зарплата": "💵",
+    "пенсия": "💵",
+    "инфляция": "📈",
+    "кризис": "📉",
+    
+    # Происшествия
+    "происшествие": "🚨",
+    "авария": "🚗💥",
+    "дтп": "🚗💥",
+    "пожар": "🔥",
+    "взрыв": "💥",
+    "чп": "⚠️",
+    "катастрофа": "❗",
+    "стихия": "🌪️",
+    "наводнение": "🌊",
+    "землетрясение": "🌋",
+    
+    # Город и инфраструктура
+    "город": "🏙️",
+    "стройка": "🏗️",
+    "ремонт": "🔨",
+    "дорога": "🛣️",
+    "транспорт": "🚌",
+    "метро": "🚇",
+    "ЖКХ": "🏢",
+    "коммунальный": "🔧",
+    "благоустройство": "🌳",
+    
+    # Здоровье и медицина
+    "здоровье": "💊",
+    "медицина": "🏥",
+    "больница": "🏥",
+    "вирус": "🦠",
+    "вакцина": "💉",
+    "пандемия": "🦠",
+    "лечение": "💊",
+    "врач": "👨‍⚕️",
+    
+    # Спорт
+    "спорт": "⚽",
+    "футбол": "⚽",
+    "хоккей": "🏒",
+    "теннис": "🎾",
+    "бокс": "🥊",
+    "единоборства": "🥊",
+    "лыжи": "⛷️",
+    "фигурное катание": "⛸️",
+    "олимпиада": "🏅",
+    "чемпионат": "🏆",
+    "матч": "⚽",
+    "игра": "🎯",
+    
+    # Культура и искусство
+    "культура": "🎭",
+    "искусство": "🎨",
+    "выставка": "🖼️",
+    "музей": "🏛️",
+    "театр": "🎭",
+    "спектакль": "🎭",
+    "кино": "🎬",
+    "фильм": "🎬",
+    "концерт": "🎵",
+    "музыка": "🎵",
+    "фестиваль": "🎪",
+    
+    # Образование
+    "школа": "🏫",
+    "университет": "🎓",
+    "образование": "📚",
+    "учеба": "📖",
+    "экзамен": "📝",
+    
+    # Технологии и наука
+    "наука": "🔬",
+    "технологии": "💻",
+    "интернет": "🌐",
+    "телефон": "📱",
+    "гаджет": "📱",
+    "компьютер": "💻",
+    "робот": "🤖",
+    "космос": "🚀",
+    
+    # Погода
+    "погода": "🌤️",
+    "дождь": "🌧️",
+    "снег": "❄️",
+    "солнце": "☀️",
+    "ветер": "💨",
+    "мороз": "🥶",
+    "жара": "🥵",
+    
+    # Разное
+    "новость": "📰",
+    "событие": "📅",
+    "выходной": "🎉",
+    "праздник": "🎊",
+    "скандал": "💥",
+    "инцидент": "⚠️",
+    "работа": "💼",
+    "бизнес": "💼",
+    "туризм": "✈️",
+    "путешествие": "✈️",
+    "еда": "🍽️",
+    "доставка": "🚚",
+}
+
+def get_emoji_for_text(text):
+    """
+    Определяет подходящий смайлик для текста новости
+    """
+    try:
+        # Приводим текст к нижнему регистру
+        text_lower = text.lower()
+        
+        # Проверяем все ключевые слова
+        found_emojis = []
+        for keyword, emoji in EMOJI_CATEGORIES.items():
+            if keyword in text_lower:
+                found_emojis.append(emoji)
+                logger.info(f"🔍 Найдено ключевое слово '{keyword}' -> смайлик {emoji}")
+        
+        # Если нашли смайлики, возвращаем первый (или самый подходящий)
+        if found_emojis:
+            # Если есть несколько, выбираем первый (или можно сделать приоритет)
+            return found_emojis[0]
+        
+        # Если не нашли, используем ИИ для определения смайлика
+        logger.info("🤖 Использую ИИ для определения смайлика")
+        emoji_prompt = f"""Определи один подходящий смайлик (эмодзи) для этой новости. Ответь только смайликом, без пояснений.
+
+Текст новости:
+{text[:500]}"""
+
+        response = requests.post(
+            DEEPSEEK_API_URL,
+            headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"},
+            json={
+                "model": "deepseek-chat",
+                "messages": [
+                    {"role": "system", "content": "Ты помощник. Определи один подходящий смайлик для текста. Ответь только смайликом."},
+                    {"role": "user", "content": emoji_prompt}
+                ],
+                "temperature": 0.3,
+                "max_tokens": 50
+            },
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            emoji = response.json()["choices"][0]["message"]["content"].strip()
+            # Проверяем, что это действительно смайлик
+            if emoji and len(emoji) <= 2:
+                logger.info(f"✅ ИИ определил смайлик: {emoji}")
+                return emoji
+        
+        # Если ничего не подошло, возвращаем стандартный
+        return "📰"
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка определения смайлика: {e}")
+        return "📰"
 
 # ============ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ============
 
@@ -578,12 +764,10 @@ def process_text_with_deepseek(text, prompt_type='full'):
                 
                 # Если все еще длиннее 400, обрезаем до последнего предложения
                 if len(result) > 400:
-                    # Находим последнюю точку перед 400 символами
                     cut_pos = result[:400].rfind('.')
                     if cut_pos > 350:
                         result = result[:cut_pos + 1]
                     else:
-                        # Если нет точки, режем по пробелу
                         cut_pos = result[:400].rfind(' ')
                         if cut_pos > 350:
                             result = result[:cut_pos]
@@ -757,7 +941,6 @@ def shorten_text_for_telegram(text):
         # Если текст короче 400 символов, дополняем его
         if len(clean_text) < 400:
             logger.info(f"📏 Текст {len(clean_text)} символов, дополняю до 400")
-            # Просим ИИ дополнить текст
             retry_prompt = f"""Дополни следующий текст до 400 символов, сохранив стиль и смысл. Добавь важные детали, если их не хватает. Текст должен быть связным и логичным.
 
 Текст для дополнения (сейчас {len(clean_text)} символов):
@@ -801,7 +984,6 @@ def shorten_text_for_telegram(text):
         # Если текст длиннее 400 символов
         logger.info(f"🤖 Создаю краткую версию текста для Telegram (сейчас {len(clean_text)} символов)")
         
-        # Промпт для создания краткой версии
         summary_prompt = f"""Напиши краткую версию следующего текста ровно на 400 символов. Сохрани все главные факты и суть. Текст должен быть связным, логичным и заканчиваться законченной мыслью.
 
 Важно:
@@ -813,7 +995,6 @@ def shorten_text_for_telegram(text):
 Текст для сокращения:
 {clean_text}"""
 
-        # Делаем несколько попыток
         best_result = None
         best_len_diff = 999
         
@@ -830,7 +1011,7 @@ def shorten_text_for_telegram(text):
                             {"role": "system", "content": "Ты редактор. Напиши краткую версию текста ровно на 400 символов. Ответь только готовым текстом без пояснений."},
                             {"role": "user", "content": summary_prompt}
                         ],
-                        "temperature": 0.7 - (attempt * 0.1),  # Постепенно уменьшаем температуру
+                        "temperature": 0.7 - (attempt * 0.1),
                         "max_tokens": 500
                     },
                     timeout=60
@@ -847,17 +1028,14 @@ def shorten_text_for_telegram(text):
                     
                     logger.info(f"📏 Попытка {attempt+1}: {current_len} символов (отклонение {len_diff})")
                     
-                    # Если результат идеальный - сразу возвращаем
                     if current_len == 400:
                         logger.info(f"✅ Идеальный результат! 400 символов")
                         return result
                     
-                    # Запоминаем лучший результат
                     if len_diff < best_len_diff:
                         best_len_diff = len_diff
                         best_result = result
                     
-                    # Если отклонение небольшое, корректируем
                     if len_diff <= 5:
                         if current_len < 400:
                             result = result + " " * (400 - current_len)
@@ -866,13 +1044,11 @@ def shorten_text_for_telegram(text):
                         logger.info(f"✅ Результат скорректирован до 400 символов")
                         return result
                     
-                    # Если результат слишком короткий, пробуем с другим промптом
                     if current_len < 350:
                         summary_prompt = f"""Текст получился слишком коротким ({current_len} символов). Напиши более полную версию на 400 символов, добавив важные детали. Сохрани все главные факты.
 
 Оригинальный текст:
 {clean_text}"""
-                    # Если результат слишком длинный
                     elif current_len > 450:
                         summary_prompt = f"""Текст получился слишком длинным ({current_len} символов). Сократи до 400 символов, оставив только самое важное.
 
@@ -885,10 +1061,8 @@ def shorten_text_for_telegram(text):
                 logger.error(f"Ошибка в попытке {attempt+1}: {e}")
                 continue
         
-        # Если после всех попыток есть результат, корректируем его
         if best_result:
             if len(best_result) > 400:
-                # Обрезаем по последней точке или пробелу
                 cut_pos = best_result[:400].rfind('.')
                 if cut_pos > 350:
                     best_result = best_result[:cut_pos + 1]
@@ -905,15 +1079,7 @@ def shorten_text_for_telegram(text):
             
             return best_result
         
-        # Если ничего не получилось, возвращаем обрезанный текст
         logger.warning("⚠️ Не удалось создать краткую версию через ИИ, обрезаю вручную")
-        if len(clean_text) > 400:
-            return clean_text[:400]
-        return clean_text
-            
-    except Exception as e:
-        logger.error(f"❌ Ошибка сокращения текста: {e}")
-        clean_text = clean_html_for_telegram(text)
         if len(clean_text) > 400:
             return clean_text[:400]
         return clean_text
@@ -949,7 +1115,7 @@ def send_text_only_to_telegram(text):
         return False
 
 def publish_to_telegram_channel(title, content, post_link, media_file_id=None, video_file_id=None, gallery_file_ids=None):
-    """Публикует пост в Telegram канал"""
+    """Публикует пост в Telegram канал с сокращением текста до 400 символов и смайликом"""
     try:
         logger.info(f"📢 Начинаю публикацию в Telegram канал...")
         
@@ -960,14 +1126,17 @@ def publish_to_telegram_channel(title, content, post_link, media_file_id=None, v
         chat_id = get_channel_id()
         logger.info(f"📢 Использую chat_id: {chat_id}")
         
+        # Определяем смайлик для новости
+        emoji = get_emoji_for_text(title + " " + content)
+        logger.info(f"🎯 Выбран смайлик: {emoji}")
+        
         # Сокращаем текст для Telegram через ИИ до 400 символов
         shortened_content = shorten_text_for_telegram(content)
         
-        # Формируем текст с сохранением форматирования
-        telegram_text = f"<b>{title}</b>\n\n{shortened_content}\n\nПодробнее: {post_link}"
+        # Формируем текст с сохранением форматирования и смайликом в начале
+        telegram_text = f"{emoji} <b>{title}</b>\n\n{shortened_content}\n\nПодробнее: {post_link}"
         
-        # 🔥 ВАЖНО: Для видео используем video_file_id, а не media_file_id
-        # Если есть видео - отправляем его, иначе отправляем фото
+        # Для видео используем video_file_id, а не media_file_id
         if video_file_id:
             logger.info(f"🎬 Отправляю видео в Telegram канал")
             media_to_send = video_file_id
@@ -1036,8 +1205,9 @@ def publish_to_telegram_channel(title, content, post_link, media_file_id=None, v
     except Exception as e:
         logger.error(f"❌ Ошибка публикации в Telegram канал: {e}")
         try:
+            emoji = get_emoji_for_text(title + " " + content)
             shortened_content = shorten_text_for_telegram(content)
-            telegram_text = f"<b>{title}</b>\n\n{shortened_content}\n\nПодробнее: {post_link}"
+            telegram_text = f"{emoji} <b>{title}</b>\n\n{shortened_content}\n\nПодробнее: {post_link}"
             return send_text_only_to_telegram(telegram_text)
         except:
             return False
@@ -1047,12 +1217,17 @@ def preview_telegram_post(title, content, post_link, chat_id, post_key, media_fi
     try:
         logger.info(f"📢 Показываю предпросмотр для публикации в Telegram...")
         
+        # Определяем смайлик для новости
+        emoji = get_emoji_for_text(title + " " + content)
+        logger.info(f"🎯 Выбран смайлик: {emoji}")
+        
         # Сокращаем текст для Telegram через ИИ до 400 символов
         shortened_content = shorten_text_for_telegram(content)
         
         media_type = "🎬 Видео" if video_file_id else "📸 Фото" if media_file_id else "📝 Текст"
         
         preview_text = f"<b>📢 ПРЕДПРОСМОТР ПУБЛИКАЦИИ В КАНАЛ</b>\n\n"
+        preview_text += f"<b>Смайлик:</b> {emoji}\n"
         preview_text += f"<b>Заголовок:</b>\n{title}\n\n"
         preview_text += f"<b>Текст (400 символов):</b>\n{shortened_content}\n\n"
         preview_text += f"<b>Медиа:</b> {media_type}\n"
@@ -1066,7 +1241,8 @@ def preview_telegram_post(title, content, post_link, chat_id, post_key, media_fi
             'media_file_id': media_file_id,
             'video_file_id': video_file_id,
             'gallery_file_ids': gallery_file_ids,
-            'chat_id': chat_id
+            'chat_id': chat_id,
+            'emoji': emoji
         }
         
         keyboard = {
@@ -1076,7 +1252,6 @@ def preview_telegram_post(title, content, post_link, chat_id, post_key, media_fi
             ]
         }
         
-        # Для предпросмотра показываем медиа
         media_to_show = video_file_id if video_file_id else media_file_id
         
         if media_to_show:
