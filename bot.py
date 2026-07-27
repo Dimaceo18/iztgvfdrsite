@@ -130,13 +130,14 @@ DEEPSEEK_PROMPT = """Ты редактор новостного сайта. Пе
 
 ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст."""
 
-TELEGRAM_SHORT_PROMPT = """Ты редактор новостного канала в Telegram. Сократи текст ровно до 400 символов (не больше и не меньше). Сохрани всю суть и смысл, все главные факты. Убери лишнюю воду. Текст должен быть законченным и логичным. Не используй символы # и ** в ответе.
+TELEGRAM_SHORT_PROMPT = """Ты редактор новостного канала в Telegram. Напиши краткую версию новости ровно 400 символов. Сохрани все главные факты и суть. Текст должен быть связным и логичным, заканчиваться законченной мыслью. Не используй троеточие, смайлики, символы # и **.
 
-ВАЖНО: 
-1. Текст должен быть ровно 400 символов
-2. НЕ используй троеточие в конце
-3. НЕ пиши слова "Заголовок:" и "Текст:"
-4. Просто напиши готовый текст для Telegram"""
+ВАЖНО:
+- Ровно 400 символов
+- Законченный текст
+- Без троеточия
+- Без слов "Заголовок:" и "Текст:"
+- Только готовый текст"""
 
 # ============ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ============
 
@@ -519,11 +520,11 @@ def process_text_with_deepseek(text, prompt_type='full'):
     try:
         if prompt_type == 'telegram':
             prompt = TELEGRAM_SHORT_PROMPT
-            system_prompt = "Ты редактор новостного канала в Telegram. Отвечай только готовым текстом для Telegram ровно 400 символов, без пояснений и вступлений. Не используй символы # и ** в ответе."
+            system_prompt = "Ты редактор новостного канала в Telegram. Напиши краткую версию новости ровно 400 символов. Ответь только готовым текстом."
             max_tokens = 600
         else:
             prompt = DEEPSEEK_PROMPT
-            system_prompt = "Ты редактор новостного сайта. Отвечай только готовым новостным текстом, без пояснений и вступлений. Не используй символы # и ** в ответе."
+            system_prompt = "Ты редактор новостного сайта. Отвечай только готовым новостным текстом, без пояснений и вступлений."
             max_tokens = 1000
         
         response = requests.post(
@@ -547,14 +548,13 @@ def process_text_with_deepseek(text, prompt_type='full'):
             result = re.sub(r'^#+\s+', '', result, flags=re.MULTILINE)
             result = result.strip()
             
-            # Для Telegram проверяем длину и корректируем
+            # Для Telegram проверяем длину
             if prompt_type == 'telegram':
-                # Если текст длиннее 400 символов, просим ИИ сократить еще раз
-                if len(result) > 400:
+                # Если текст слишком длинный, просим сократить
+                if len(result) > 420:
                     logger.info(f"📏 Текст {len(result)} символов, прошу ИИ сократить до 400")
-                    # Повторный запрос с указанием точной длины
-                    retry_prompt = f"""Сократи следующий текст ровно до 400 символов. Сохрани всю суть и главные факты. Текст должен быть законченным и логичным. Не используй троеточие.
-                    
+                    retry_prompt = f"""Сократи следующий текст ровно до 400 символов. Сохрани все главные факты и суть. Текст должен быть законченным и логичным.
+
 Текст для сокращения:
 {result}"""
                     retry_response = requests.post(
@@ -573,18 +573,28 @@ def process_text_with_deepseek(text, prompt_type='full'):
                     )
                     if retry_response.status_code == 200:
                         result = retry_response.json()["choices"][0]["message"]["content"].strip()
-                        # Если все еще длиннее 400, обрезаем вручную
-                        if len(result) > 400:
-                            result = result[:400]
-                    else:
-                        # Если ошибка, обрезаем вручную
-                        result = result[:400]
+                        result = re.sub(r'^#+\s+', '', result, flags=re.MULTILINE)
+                        result = result.strip()
                 
-                # Если текст короче 400, дополняем
+                # Если все еще длиннее 400, обрезаем до последнего предложения
+                if len(result) > 400:
+                    # Находим последнюю точку перед 400 символами
+                    cut_pos = result[:400].rfind('.')
+                    if cut_pos > 350:
+                        result = result[:cut_pos + 1]
+                    else:
+                        # Если нет точки, режем по пробелу
+                        cut_pos = result[:400].rfind(' ')
+                        if cut_pos > 350:
+                            result = result[:cut_pos]
+                        else:
+                            result = result[:400]
+                
+                # Если текст слишком короткий, дополняем
                 elif len(result) < 380:
                     logger.info(f"📏 Текст {len(result)} символов, прошу ИИ дополнить до 400")
-                    retry_prompt = f"""Дополни следующий текст до 400 символов, сохранив стиль и смысл. Добавь важные детали, если их не хватает.
-                    
+                    retry_prompt = f"""Дополни следующий текст до 400 символов, сохранив стиль и смысл. Добавь важные детали.
+
 Текст для дополнения:
 {result}"""
                     retry_response = requests.post(
@@ -603,6 +613,8 @@ def process_text_with_deepseek(text, prompt_type='full'):
                     )
                     if retry_response.status_code == 200:
                         result = retry_response.json()["choices"][0]["message"]["content"].strip()
+                        result = re.sub(r'^#+\s+', '', result, flags=re.MULTILINE)
+                        result = result.strip()
                         if len(result) > 400:
                             result = result[:400]
             
@@ -730,15 +742,8 @@ def clean_html_for_telegram(text):
     return text
 
 def shorten_text_for_telegram(text):
-    """Сокращает текст для Telegram через ИИ до 400 символов"""
+    """Сокращает текст для Telegram через ИИ до 400 символов с сохранением смысла"""
     try:
-        if not DEEPSEEK_API_KEY:
-            logger.warning("⚠️ DeepSeek API ключ не найден, обрезаю текст вручную")
-            clean_text = clean_html_for_telegram(text)
-            if len(clean_text) > 400:
-                return clean_text[:400]
-            return clean_text
-        
         # Очищаем текст от HTML
         clean_text = clean_html_for_telegram(text)
         
@@ -748,57 +753,67 @@ def shorten_text_for_telegram(text):
             return clean_text
         
         logger.info(f"🤖 Отправляю текст в ИИ для приведения к 400 символам (сейчас {len(clean_text)})")
+        
+        # Отправляем в ИИ для сокращения
         shortened = process_text_with_deepseek(clean_text, prompt_type='telegram')
         
         if shortened:
-            # Проверяем длину и корректируем если нужно
-            if len(shortened) > 400:
-                logger.info(f"📏 Текст {len(shortened)} символов, обрезаю до 400")
-                shortened = shortened[:400]
-            elif len(shortened) < 400:
-                logger.info(f"📏 Текст {len(shortened)} символов, пробую дополнить")
-                # Пробуем дополнить через ИИ еще раз
-                retry_text = shortened
-                for attempt in range(3):
-                    retry_prompt = f"""Дополни следующий текст до 400 символов, сохранив стиль и смысл. Добавь важные детали, если их не хватает. Сейчас текст длиной {len(retry_text)} символов.
-                    
-Текст для дополнения:
-{retry_text}"""
-                    retry_response = requests.post(
-                        DEEPSEEK_API_URL,
-                        headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"},
-                        json={
-                            "model": "deepseek-chat",
-                            "messages": [
-                                {"role": "system", "content": "Ты редактор. Дополни текст до 400 символов. Ответь только готовым текстом."},
-                                {"role": "user", "content": retry_prompt}
-                            ],
-                            "temperature": 0.5,
-                            "max_tokens": 500
-                        },
-                        timeout=60
-                    )
-                    if retry_response.status_code == 200:
-                        retry_result = retry_response.json()["choices"][0]["message"]["content"].strip()
-                        if 380 <= len(retry_result) <= 400:
-                            shortened = retry_result
-                            logger.info(f"✅ Текст дополнен до {len(shortened)} символов")
-                            break
-                        elif len(retry_result) > 400:
-                            shortened = retry_result[:400]
-                            logger.info(f"✅ Текст дополнен и обрезан до 400 символов")
-                            break
-                        else:
-                            retry_text = retry_result
-                            logger.info(f"🔄 Попытка {attempt+1}: текст {len(retry_text)} символов")
-                    time.sleep(1)
+            # Проверяем итоговую длину
+            final_len = len(shortened)
+            logger.info(f"✅ Итоговая длина текста: {final_len} символов")
             
-            logger.info(f"✅ Итоговая длина текста: {len(shortened)} символов")
+            if final_len > 400:
+                logger.warning(f"⚠️ Текст {final_len} символов, обрезаю по точке")
+                # Обрезаем по последней точке перед 400
+                cut_pos = shortened[:400].rfind('.')
+                if cut_pos > 350:
+                    shortened = shortened[:cut_pos + 1]
+                else:
+                    cut_pos = shortened[:400].rfind(' ')
+                    if cut_pos > 350:
+                        shortened = shortened[:cut_pos]
+                    else:
+                        shortened = shortened[:400]
+                logger.info(f"📏 После обрезания: {len(shortened)} символов")
+            elif final_len < 380:
+                logger.warning(f"⚠️ Текст {final_len} символов, слишком короткий")
+                # Пробуем дополнить
+                retry_prompt = f"""Дополни следующий текст до 400 символов, сохранив стиль и смысл. Добавь важные детали.
+
+Текст для дополнения:
+{shortened}"""
+                retry_response = requests.post(
+                    DEEPSEEK_API_URL,
+                    headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"},
+                    json={
+                        "model": "deepseek-chat",
+                        "messages": [
+                            {"role": "system", "content": "Ты редактор. Дополни текст до 400 символов. Ответь только готовым текстом."},
+                            {"role": "user", "content": retry_prompt}
+                        ],
+                        "temperature": 0.5,
+                        "max_tokens": 500
+                    },
+                    timeout=60
+                )
+                if retry_response.status_code == 200:
+                    shortened = retry_response.json()["choices"][0]["message"]["content"].strip()
+                    shortened = re.sub(r'^#+\s+', '', shortened, flags=re.MULTILINE)
+                    shortened = shortened.strip()
+                    if len(shortened) > 400:
+                        shortened = shortened[:400]
+                    logger.info(f"📏 После дополнения: {len(shortened)} символов")
+            
             return shortened
         else:
-            logger.warning(f"⚠️ ИИ вернул пустой результат, обрезаю вручную")
+            # Если ИИ не справился, обрезаем вручную
+            logger.warning(f"⚠️ ИИ не справился, обрезаю вручную до 400")
             if len(clean_text) > 400:
-                return clean_text[:400]
+                cut_pos = clean_text[:400].rfind('.')
+                if cut_pos > 350:
+                    return clean_text[:cut_pos + 1]
+                else:
+                    return clean_text[:400]
             return clean_text
             
     except Exception as e:
@@ -832,7 +847,7 @@ def send_text_only_to_telegram(text):
         return False
 
 def publish_to_telegram_channel(title, content, post_link, media_file_id=None, video_file_id=None, gallery_file_ids=None):
-    """Публикует пост в Telegram канал с сокращением текста до 400 символов"""
+    """Публикует пост в Telegram канал"""
     try:
         logger.info(f"📢 Начинаю публикацию в Telegram канал...")
         
@@ -849,9 +864,19 @@ def publish_to_telegram_channel(title, content, post_link, media_file_id=None, v
         # Формируем текст с сохранением форматирования
         telegram_text = f"<b>{title}</b>\n\n{shortened_content}\n\nПодробнее: {post_link}"
         
-        if media_file_id:
+        # 🔥 ВАЖНО: Для видео используем video_file_id, а не media_file_id
+        # Если есть видео - отправляем его, иначе отправляем фото
+        if video_file_id:
+            logger.info(f"🎬 Отправляю видео в Telegram канал")
+            media_to_send = video_file_id
+            is_video = True
+        else:
+            media_to_send = media_file_id
+            is_video = False
+        
+        if media_to_send:
             get_file_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile"
-            file_response = requests.get(get_file_url, params={'file_id': media_file_id}, timeout=60)
+            file_response = requests.get(get_file_url, params={'file_id': media_to_send}, timeout=60)
             
             if file_response.status_code == 200:
                 result = file_response.json().get('result')
@@ -864,7 +889,7 @@ def publish_to_telegram_channel(title, content, post_link, media_file_id=None, v
                         if media_response.status_code == 200:
                             media_content = media_response.content
                             
-                            if video_file_id:
+                            if is_video:
                                 send_url = f"{TG_API_URL}/sendVideo"
                                 files = {'video': media_content}
                                 data = {
@@ -923,9 +948,12 @@ def preview_telegram_post(title, content, post_link, chat_id, post_key, media_fi
         # Сокращаем текст для Telegram через ИИ до 400 символов
         shortened_content = shorten_text_for_telegram(content)
         
+        media_type = "🎬 Видео" if video_file_id else "📸 Фото" if media_file_id else "📝 Текст"
+        
         preview_text = f"<b>📢 ПРЕДПРОСМОТР ПУБЛИКАЦИИ В КАНАЛ</b>\n\n"
         preview_text += f"<b>Заголовок:</b>\n{title}\n\n"
-        preview_text += f"<b>Текст (ровно 400 символов):</b>\n{shortened_content}\n\n"
+        preview_text += f"<b>Текст (400 символов):</b>\n{shortened_content}\n\n"
+        preview_text += f"<b>Медиа:</b> {media_type}\n"
         preview_text += f"<b>Ссылка:</b>\n{post_link}\n\n"
         preview_text += f"<i>⬇️ Нажмите кнопку ниже для публикации в канал</i>"
         
@@ -946,9 +974,12 @@ def preview_telegram_post(title, content, post_link, chat_id, post_key, media_fi
             ]
         }
         
-        if media_file_id:
+        # Для предпросмотра показываем медиа
+        media_to_show = video_file_id if video_file_id else media_file_id
+        
+        if media_to_show:
             get_file_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile"
-            file_response = requests.get(get_file_url, params={'file_id': media_file_id}, timeout=60)
+            file_response = requests.get(get_file_url, params={'file_id': media_to_show}, timeout=60)
             
             if file_response.status_code == 200:
                 result = file_response.json().get('result')
