@@ -132,6 +132,31 @@ DEEPSEEK_PROMPT = """Ты редактор новостного сайта. Пе
 
 # ============ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ============
 
+def get_channel_id():
+    """Получает правильный ID канала"""
+    try:
+        # Если CHANNEL_ID уже начинается с -100, оставляем как есть
+        if str(CHANNEL_ID).startswith('-100'):
+            return CHANNEL_ID
+        
+        # Пробуем получить информацию о канале
+        url = f"{TG_API_URL}/getChat"
+        params = {'chat_id': CHANNEL_ID}
+        response = requests.get(url, params=params, timeout=30)
+        
+        if response.status_code == 200:
+            chat_data = response.json().get('result', {})
+            chat_id = chat_data.get('id')
+            logger.info(f"✅ Получен ID канала: {chat_id}")
+            return chat_id
+        else:
+            logger.error(f"❌ Ошибка получения ID канала: {response.status_code}")
+            logger.error(f"Ответ: {response.text}")
+            return CHANNEL_ID
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения ID канала: {e}")
+        return CHANNEL_ID
+
 def extract_title_and_content(text):
     """Извлекает заголовок и контент из текста"""
     if not text:
@@ -619,9 +644,10 @@ def get_action_keyboard(post_key):
 def send_text_only_to_telegram(text):
     """Отправляет только текст в Telegram канал"""
     try:
+        chat_id = get_channel_id()
         send_url = f"{TG_API_URL}/sendMessage"
         data = {
-            'chat_id': CHANNEL_ID,
+            'chat_id': chat_id,
             'text': text,
             'parse_mode': 'HTML'
         }
@@ -632,7 +658,7 @@ def send_text_only_to_telegram(text):
             return True
         else:
             logger.error(f"❌ Ошибка публикации текста в канал: {response.status_code}")
-            logger.error(f"Ответ: {response.text[:200]}")
+            logger.error(f"Ответ: {response.text}")
             return False
     except Exception as e:
         logger.error(f"❌ Ошибка отправки текста: {e}")
@@ -646,6 +672,10 @@ def publish_to_telegram_channel(title, content, post_link, media_file_id=None, v
         if not CHANNEL_ID:
             logger.error("❌ CHANNEL_ID не указан в переменных окружения")
             return False
+        
+        # Получаем правильный ID канала
+        chat_id = get_channel_id()
+        logger.info(f"📢 Использую chat_id: {chat_id}")
         
         clean_content = re.sub(r'<[^>]+>', '', content)
         clean_content = re.sub(r'\[video[^\]]*\]', '', clean_content)
@@ -678,7 +708,7 @@ def publish_to_telegram_channel(title, content, post_link, media_file_id=None, v
                                 send_url = f"{TG_API_URL}/sendVideo"
                                 files = {'video': media_content}
                                 data = {
-                                    'chat_id': CHANNEL_ID,
+                                    'chat_id': chat_id,
                                     'caption': telegram_text,
                                     'parse_mode': 'HTML',
                                     'supports_streaming': True
@@ -688,7 +718,7 @@ def publish_to_telegram_channel(title, content, post_link, media_file_id=None, v
                                 send_url = f"{TG_API_URL}/sendPhoto"
                                 files = {'photo': media_content}
                                 data = {
-                                    'chat_id': CHANNEL_ID,
+                                    'chat_id': chat_id,
                                     'caption': telegram_text,
                                     'parse_mode': 'HTML'
                                 }
@@ -699,6 +729,7 @@ def publish_to_telegram_channel(title, content, post_link, media_file_id=None, v
                                 return True
                             else:
                                 logger.error(f"❌ Ошибка публикации в канал: {response.status_code}")
+                                logger.error(f"Ответ: {response.text}")
                                 return send_text_only_to_telegram(telegram_text)
                         else:
                             logger.error(f"❌ Ошибка скачивания медиа: {media_response.status_code}")
