@@ -129,6 +129,110 @@ DEEPSEEK_PROMPT = """Ты редактор новостного сайта. Пе
 
 ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст."""
 
+# НОВАЯ ФУНКЦИЯ: Публикация в Telegram канал
+def publish_to_telegram_channel(title, content, post_link, media_file_id=None, video_file_id=None, gallery_file_ids=None):
+    """
+    Публикует пост в Telegram канал с заголовком, текстом, медиа и ссылкой на статью
+    """
+    try:
+        logger.info(f"📢 Начинаю публикацию в Telegram канал...")
+        
+        # Формируем текст для Telegram (заголовок + текст + ссылка)
+        clean_content = re.sub(r'<[^>]+>', '', content)
+        clean_content = re.sub(r'\[video[^\]]*\]', '', clean_content)
+        clean_content = re.sub(r'\[gallery[^\]]*\]', '', clean_content)
+        clean_content = ' '.join(clean_content.split())
+        
+        telegram_text = f"<b>{title}</b>\n\n{clean_content}\n\n<a href=\"{post_link}\">Подробнее: ссылка на статью</a>"
+        
+        # Проверяем, есть ли медиа для публикации
+        if media_file_id:
+            # Скачиваем медиа из Telegram
+            logger.info(f"📸 Скачиваю медиа для публикации в канал...")
+            get_file_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile"
+            file_response = requests.get(get_file_url, params={'file_id': media_file_id}, timeout=60)
+            
+            if file_response.status_code == 200:
+                file_path = file_response.json().get('result', {}).get('file_path')
+                if file_path:
+                    media_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
+                    media_response = requests.get(media_url, timeout=120)
+                    
+                    if media_response.status_code == 200:
+                        media_content = media_response.content
+                        
+                        # Отправляем в канал с подписью
+                        if video_file_id:
+                            # Это видео
+                            send_url = f"{TG_API_URL}/sendVideo"
+                            files = {'video': media_content}
+                            data = {
+                                'chat_id': CHANNEL_ID,
+                                'caption': telegram_text,
+                                'parse_mode': 'HTML'
+                            }
+                            response = requests.post(send_url, files=files, data=data, timeout=60)
+                        else:
+                            # Это фото
+                            send_url = f"{TG_API_URL}/sendPhoto"
+                            files = {'photo': media_content}
+                            data = {
+                                'chat_id': CHANNEL_ID,
+                                'caption': telegram_text,
+                                'parse_mode': 'HTML'
+                            }
+                            response = requests.post(send_url, files=files, data=data, timeout=60)
+                        
+                        if response.status_code in [200, 201]:
+                            logger.info(f"✅ Пост опубликован в Telegram канале с медиа")
+                            
+                            # Если есть галерея, отправляем дополнительные фото
+                            if gallery_file_ids and len(gallery_file_ids) > 0:
+                                for gallery_file_id in gallery_file_ids[:5]:  # Максимум 5 фото в группе
+                                    try:
+                                        file_response = requests.get(get_file_url, params={'file_id': gallery_file_id}, timeout=60)
+                                        if file_response.status_code == 200:
+                                            gallery_path = file_response.json().get('result', {}).get('file_path')
+                                            if gallery_path:
+                                                gallery_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{gallery_path}"
+                                                gallery_response = requests.get(gallery_url, timeout=120)
+                                                if gallery_response.status_code == 200:
+                                                    send_url = f"{TG_API_URL}/sendPhoto"
+                                                    files = {'photo': gallery_response.content}
+                                                    data = {
+                                                        'chat_id': CHANNEL_ID,
+                                                        'caption': f"📸 Дополнительное фото к статье: {title[:50]}..."
+                                                    }
+                                                    requests.post(send_url, files=files, data=data, timeout=60)
+                                    except Exception as e:
+                                        logger.error(f"❌ Ошибка отправки дополнительного фото: {e}")
+                            
+                            return True
+                        else:
+                            logger.error(f"❌ Ошибка публикации в канал: {response.status_code}")
+                    else:
+                        logger.error(f"❌ Ошибка скачивания медиа: {media_response.status_code}")
+        
+        # Если нет медиа или не удалось загрузить, отправляем текст
+        send_url = f"{TG_API_URL}/sendMessage"
+        data = {
+            'chat_id': CHANNEL_ID,
+            'text': telegram_text,
+            'parse_mode': 'HTML'
+        }
+        response = requests.post(send_url, json=data, timeout=60)
+        
+        if response.status_code in [200, 201]:
+            logger.info(f"✅ Пост опубликован в Telegram канале (текст)")
+            return True
+        else:
+            logger.error(f"❌ Ошибка публикации в канал: {response.status_code}")
+            return False
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка публикации в Telegram канал: {e}")
+        return False
+
 def get_category_id(post_type, category_slug):
     """Получить ID категории из словаря"""
     categories = CATEGORIES.get(post_type, {})
@@ -578,15 +682,15 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
                     logger.warning(f"⚠️ Рубрика {category_slug} не найдена")
             
             logger.info(f"✅ SEO данные добавлены в Yoast")
-            return True, post_link
+            return True, post_link, post_id
         else:
             logger.error(f"❌ Ошибка: {response.status_code}")
             logger.error(f"Ответ: {response.text[:500]}")
-            return False, None
+            return False, None, None
             
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
-        return False, None
+        return False, None, None
 
 def publish_scheduled_post(post_key):
     """Публикация отложенного поста"""
@@ -600,10 +704,9 @@ def publish_scheduled_post(post_key):
     logger.info(f"⏰ Время публикации для поста {post_key}!")
     
     try:
-        # 🔥 ИСПРАВЛЕНИЕ: Используем уже загруженные ID, если они есть
         featured_media_id = post_data.get('featured_media_id')
-        video_media_id = post_data.get('video_media_id')  # ID видео в WordPress
-        gallery_ids = post_data.get('gallery_ids', [])  # Список ID фото в WordPress
+        video_media_id = post_data.get('video_media_id')
+        gallery_ids = post_data.get('gallery_ids', [])
         
         title = post_data.get('title', '')
         post_type = post_data.get('post_type', 'news')
@@ -613,7 +716,6 @@ def publish_scheduled_post(post_key):
         
         video_url = None
         
-        # Получаем URL видео если есть ID
         if is_video and video_media_id:
             try:
                 video_info = wp_session.get(
@@ -629,7 +731,6 @@ def publish_scheduled_post(post_key):
             except Exception as e:
                 logger.error(f"❌ Ошибка получения URL видео: {e}")
         
-        # Если нет ID видео, но есть file_id - загружаем заново
         if is_video and not video_media_id:
             video_file_id = post_data.get('video_file_id')
             if video_file_id:
@@ -648,9 +749,7 @@ def publish_scheduled_post(post_key):
                     except Exception as e:
                         logger.error(f"❌ Ошибка получения URL видео: {e}")
         
-        # Проверяем наличие обложки
         if not featured_media_id:
-            # Если нет ID обложки, но есть file_id - загружаем
             media_file_id = post_data.get('media_file_id')
             if media_file_id:
                 logger.info(f"📸 Загрузка обложки из file_id...")
@@ -658,7 +757,6 @@ def publish_scheduled_post(post_key):
                 if featured_media_id:
                     logger.info(f"✅ Обложка загружена ID={featured_media_id}")
         
-        # Проверяем наличие фото в галерее
         if not gallery_ids and post_data.get('gallery_file_ids'):
             logger.info(f"📸 Загрузка фото для галереи...")
             for file_id in post_data.get('gallery_file_ids', []):
@@ -668,7 +766,7 @@ def publish_scheduled_post(post_key):
                         gallery_ids.append(photo_id)
                         logger.info(f"✅ Фото загружено ID={photo_id}")
         
-        success, link = create_wp_post(
+        success, link, post_id = create_wp_post(
             title,
             content,
             post_type,
@@ -683,6 +781,21 @@ def publish_scheduled_post(post_key):
         
         if success:
             tg_send_message(chat_id, f"✅ Пост опубликован по расписанию!\n\n{link}")
+            
+            # 🔥 НОВОЕ: Публикация в Telegram канал
+            logger.info(f"📢 Отправляем в Telegram канал...")
+            media_file_id = post_data.get('media_file_id')
+            video_file_id = post_data.get('video_file_id')
+            gallery_file_ids = post_data.get('gallery_file_ids', [])
+            
+            publish_to_telegram_channel(
+                title=title,
+                content=content,
+                post_link=link,
+                media_file_id=media_file_id,
+                video_file_id=video_file_id,
+                gallery_file_ids=gallery_file_ids
+            )
         else:
             tg_send_message(chat_id, "❌ Ошибка публикации по расписанию")
         
@@ -883,7 +996,6 @@ def process_update(update_json):
                     tg_send_message(chat_id, "❌ Раздел не выбран.")
                     return
                 
-                # 🔥 ИСПРАВЛЕНИЕ: Загружаем медиа ДО сохранения в планировщик
                 tg_send_message(chat_id, "⏳ Загружаю медиа в WordPress...")
                 
                 is_video = post_data.get('is_video', False)
@@ -896,7 +1008,6 @@ def process_update(update_json):
                 video_media_id = None
                 gallery_ids = []
                 
-                # 1. Загружаем ВИДЕО
                 if is_video and video_file_id:
                     logger.info(f"🎬 Загрузка видео для планирования...")
                     video_media_id = download_and_upload_photo(video_file_id, is_video=True, title=title)
@@ -905,7 +1016,6 @@ def process_update(update_json):
                     else:
                         logger.warning("⚠️ Видео не загрузилось")
                 
-                # 2. Загружаем ОБЛОЖКУ (если есть)
                 if media_file_id:
                     logger.info(f"📸 Загрузка обложки для планирования...")
                     featured_media_id = download_and_upload_photo(media_file_id, is_video=False, title=title)
@@ -914,7 +1024,6 @@ def process_update(update_json):
                     else:
                         logger.warning("⚠️ Обложка не загрузилась")
                 
-                # 3. Загружаем фото для галереи
                 for file_id in gallery_file_ids:
                     if file_id != video_file_id:
                         logger.info(f"📸 Загрузка фото для галереи...")
@@ -926,7 +1035,6 @@ def process_update(update_json):
                 schedule_time = datetime.now() + timedelta(minutes=minutes)
                 time_str = schedule_time.strftime('%d.%m.%Y %H:%M')
                 
-                # 🔥 ИСПРАВЛЕНИЕ: Сохраняем ID из WordPress, а не file_id
                 scheduled_posts[post_key] = {
                     'title': post_data['title'],
                     'content': post_data['content'],
@@ -935,11 +1043,9 @@ def process_update(update_json):
                     'chat_id': chat_id,
                     'msg_id': msg_id,
                     'is_video': is_video,
-                    # Сохраняем WordPress ID вместо Telegram file_id
-                    'featured_media_id': featured_media_id,  # ID обложки в WP
-                    'video_media_id': video_media_id,  # ID видео в WP
-                    'gallery_ids': gallery_ids,  # ID фото в WP
-                    # Сохраняем file_id на случай, если понадобится перезагрузить
+                    'featured_media_id': featured_media_id,
+                    'video_media_id': video_media_id,
+                    'gallery_ids': gallery_ids,
                     'media_file_id': media_file_id,
                     'video_file_id': video_file_id,
                     'gallery_file_ids': gallery_file_ids
@@ -1007,8 +1113,8 @@ def process_update(update_json):
                 tg_send_message(chat_id, "⏳ Публикую на сайт...")
                 
                 is_video = post_data.get('is_video', False)
-                media_file_id = post_data.get('media_file_id')  # Фото для обложки
-                video_file_id = post_data.get('video_file_id')  # ID видео
+                media_file_id = post_data.get('media_file_id')
+                video_file_id = post_data.get('video_file_id')
                 gallery_file_ids = post_data.get('gallery_file_ids', [])
                 title = post_data.get('title', '')
                 post_type = post_data.get('post_type', 'news')
@@ -1019,7 +1125,6 @@ def process_update(update_json):
                 gallery_ids = []
                 featured_media_id = None
                 
-                # 1. Загружаем ВИДЕО (будет вставлено в контент)
                 if is_video and video_file_id:
                     logger.info(f"🎬 Загрузка видео...")
                     video_media_id = download_and_upload_photo(video_file_id, is_video=True, title=title)
@@ -1040,7 +1145,6 @@ def process_update(update_json):
                     else:
                         logger.warning("⚠️ Видео не загрузилось")
                 
-                # 2. Загружаем ФОТО для обложки
                 if media_file_id:
                     logger.info(f"📸 Загрузка фото для обложки...")
                     featured_media_id = download_and_upload_photo(media_file_id, is_video=False, title=title)
@@ -1049,7 +1153,6 @@ def process_update(update_json):
                     else:
                         logger.warning("⚠️ Фото для обложки не загрузилось")
                 
-                # 3. Загружаем остальные фото для галереи
                 for file_id in gallery_file_ids:
                     if file_id != video_file_id:
                         logger.info(f"📸 Загрузка фото для галереи...")
@@ -1058,14 +1161,14 @@ def process_update(update_json):
                             gallery_ids.append(photo_id)
                             logger.info(f"✅ Фото загружено ID={photo_id}")
                 
-                success, link = create_wp_post(
+                success, link, post_id = create_wp_post(
                     title,
                     content,
                     post_type,
                     category_slug,
-                    featured_media_id,  # Обложка - это ФОТО
+                    featured_media_id,
                     True,
-                    video_url,  # URL видео для вставки в контент
+                    video_url,
                     is_video,
                     gallery_ids if gallery_ids else None,
                     None
@@ -1073,6 +1176,17 @@ def process_update(update_json):
                 
                 if success:
                     tg_send_message(chat_id, f"✅ Пост опубликован!\n\n{link}")
+                    
+                    # 🔥 НОВОЕ: Публикация в Telegram канал
+                    logger.info(f"📢 Отправляем в Telegram канал...")
+                    publish_to_telegram_channel(
+                        title=title,
+                        content=content,
+                        post_link=link,
+                        media_file_id=media_file_id,
+                        video_file_id=video_file_id,
+                        gallery_file_ids=gallery_file_ids
+                    )
                 else:
                     tg_send_message(chat_id, "❌ Ошибка публикации")
                 
@@ -1095,8 +1209,8 @@ def process_update(update_json):
                 tg_send_message(chat_id, "⏳ Сохраняю в черновики...")
                 
                 is_video = post_data.get('is_video', False)
-                media_file_id = post_data.get('media_file_id')  # Фото для обложки
-                video_file_id = post_data.get('video_file_id')  # ID видео
+                media_file_id = post_data.get('media_file_id')
+                video_file_id = post_data.get('video_file_id')
                 gallery_file_ids = post_data.get('gallery_file_ids', [])
                 title = post_data.get('title', '')
                 post_type = post_data.get('post_type', 'news')
@@ -1107,7 +1221,6 @@ def process_update(update_json):
                 gallery_ids = []
                 featured_media_id = None
                 
-                # 1. Загружаем ВИДЕО (будет вставлено в контент)
                 if is_video and video_file_id:
                     logger.info(f"🎬 Загрузка видео...")
                     video_media_id = download_and_upload_photo(video_file_id, is_video=True, title=title)
@@ -1128,7 +1241,6 @@ def process_update(update_json):
                     else:
                         logger.warning("⚠️ Видео не загрузилось")
                 
-                # 2. Загружаем ФОТО для обложки
                 if media_file_id:
                     logger.info(f"📸 Загрузка фото для обложки...")
                     featured_media_id = download_and_upload_photo(media_file_id, is_video=False, title=title)
@@ -1137,7 +1249,6 @@ def process_update(update_json):
                     else:
                         logger.warning("⚠️ Фото для обложки не загрузилось")
                 
-                # 3. Загружаем остальные фото для галереи
                 for file_id in gallery_file_ids:
                     if file_id != video_file_id:
                         logger.info(f"📸 Загрузка фото для галереи...")
@@ -1146,14 +1257,14 @@ def process_update(update_json):
                             gallery_ids.append(photo_id)
                             logger.info(f"✅ Фото загружено ID={photo_id}")
                 
-                success, link = create_wp_post(
+                success, link, post_id = create_wp_post(
                     title,
                     content,
                     post_type,
                     category_slug,
-                    featured_media_id,  # Обложка - это ФОТО
+                    featured_media_id,
                     False,
-                    video_url,  # URL видео для вставки в контент
+                    video_url,
                     is_video,
                     gallery_ids if gallery_ids else None,
                     None
@@ -1183,35 +1294,29 @@ def process_update(update_json):
             has_photo = 'photo' in message
             has_video = 'video' in message
             
-            # НОВАЯ ЛОГИКА: Проверяем, ожидаем ли мы фото для видео
             if has_photo and chat_id in video_awaiting_photo:
-                # Получаем данные ожидающего видео
                 video_data = video_awaiting_photo[chat_id]
                 
-                # Получаем фото
                 photos = message['photo']
                 if photos and len(photos) > 0:
                     photo_file_id = photos[-1]['file_id']
                     
-                    # Объединяем данные видео и фото
                     title, content = extract_title_and_content(video_data['text'])
                     formatted_content = format_content_for_wp(content)
                     
                     post_key = str(int(time.time() * 1000))
                     pending_posts[post_key] = {
                         'original_text': video_data['text'],
-                        'media_file_id': photo_file_id,  # Фото для обложки
-                        'is_video': True,  # Это видео новость
+                        'media_file_id': photo_file_id,
+                        'is_video': True,
                         'title': title,
                         'content': formatted_content,
-                        'video_file_id': video_data['video_file_id'],  # ID видео
-                        'gallery_file_ids': [photo_file_id]  # Фото также будет в галерее
+                        'video_file_id': video_data['video_file_id'],
+                        'gallery_file_ids': [photo_file_id]
                     }
                     
-                    # Удаляем из ожидания
                     del video_awaiting_photo[chat_id]
                     
-                    # Показываем выбор раздела
                     keyboard = {
                         "inline_keyboard": []
                     }
@@ -1231,7 +1336,6 @@ def process_update(update_json):
                     logger.info(f"✅ Видео + фото объединены в пост {post_key}")
                     return
             
-            # Обработка альбомов (без изменений)
             if media_group_id and has_photo:
                 photos = message['photo']
                 if photos and len(photos) > 0:
@@ -1262,22 +1366,18 @@ def process_update(update_json):
                     logger.info(f"⏳ Запущен таймер для группы {media_group_id} на 3 секунды")
                 return
             
-            # НОВАЯ ЛОГИКА: Обработка видео
             if has_video:
                 video_file_id = message['video']['file_id']
                 
-                # Проверяем, есть ли текст
                 if not text:
                     tg_send_message(chat_id, "❌ Отправьте текст новости вместе с видео.\nПервая строка будет заголовком.")
                     return
                 
-                # Сохраняем данные видео и ожидаем фото
                 video_awaiting_photo[chat_id] = {
                     'video_file_id': video_file_id,
                     'text': text
                 }
                 
-                # Запрашиваем фото
                 tg_send_message(
                     chat_id,
                     "📸 Теперь отправьте ФОТО для этой новости.\n"
@@ -1288,7 +1388,6 @@ def process_update(update_json):
                 logger.info(f"🎬 Получено видео, ожидаем фото от {chat_id}")
                 return
             
-            # Обработка обычных фото (без изменений)
             if has_photo and not media_group_id:
                 photos = message['photo']
                 if photos and len(photos) > 0:
@@ -1302,7 +1401,6 @@ def process_update(update_json):
                 media_file_id = None
                 is_video = False
             
-            # Обработка текста без медиа
             if not text and media_file_id:
                 tg_send_message(chat_id, "❌ Отправьте текст новости.\nПервая строка будет заголовком.")
                 return
@@ -1310,7 +1408,6 @@ def process_update(update_json):
             if not text:
                 return
             
-            # Создание поста для фото (без изменений)
             title, content = extract_title_and_content(text)
             formatted_content = format_content_for_wp(content)
             
