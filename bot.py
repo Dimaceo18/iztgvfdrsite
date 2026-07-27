@@ -742,7 +742,9 @@ def clean_html_for_telegram(text):
     return text
 
 def shorten_text_for_telegram(text):
-    """Сокращает текст для Telegram через ИИ до 400 символов с сохранением смысла"""
+    """
+    Создает краткую версию текста для Telegram через ИИ (ровно 400 символов)
+    """
     try:
         # Очищаем текст от HTML
         clean_text = clean_html_for_telegram(text)
@@ -752,69 +754,169 @@ def shorten_text_for_telegram(text):
             logger.info(f"✅ Текст уже ровно 400 символов")
             return clean_text
         
-        logger.info(f"🤖 Отправляю текст в ИИ для приведения к 400 символам (сейчас {len(clean_text)})")
-        
-        # Отправляем в ИИ для сокращения
-        shortened = process_text_with_deepseek(clean_text, prompt_type='telegram')
-        
-        if shortened:
-            # Проверяем итоговую длину
-            final_len = len(shortened)
-            logger.info(f"✅ Итоговая длина текста: {final_len} символов")
-            
-            if final_len > 400:
-                logger.warning(f"⚠️ Текст {final_len} символов, обрезаю по точке")
-                # Обрезаем по последней точке перед 400
-                cut_pos = shortened[:400].rfind('.')
-                if cut_pos > 350:
-                    shortened = shortened[:cut_pos + 1]
-                else:
-                    cut_pos = shortened[:400].rfind(' ')
-                    if cut_pos > 350:
-                        shortened = shortened[:cut_pos]
-                    else:
-                        shortened = shortened[:400]
-                logger.info(f"📏 После обрезания: {len(shortened)} символов")
-            elif final_len < 380:
-                logger.warning(f"⚠️ Текст {final_len} символов, слишком короткий")
-                # Пробуем дополнить
-                retry_prompt = f"""Дополни следующий текст до 400 символов, сохранив стиль и смысл. Добавь важные детали.
+        # Если текст короче 400 символов, дополняем его
+        if len(clean_text) < 400:
+            logger.info(f"📏 Текст {len(clean_text)} символов, дополняю до 400")
+            # Просим ИИ дополнить текст
+            retry_prompt = f"""Дополни следующий текст до 400 символов, сохранив стиль и смысл. Добавь важные детали, если их не хватает. Текст должен быть связным и логичным.
 
-Текст для дополнения:
-{shortened}"""
-                retry_response = requests.post(
+Текст для дополнения (сейчас {len(clean_text)} символов):
+{clean_text}"""
+            
+            for attempt in range(3):
+                try:
+                    response = requests.post(
+                        DEEPSEEK_API_URL,
+                        headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"},
+                        json={
+                            "model": "deepseek-chat",
+                            "messages": [
+                                {"role": "system", "content": "Ты редактор. Дополни текст до 400 символов. Ответь только готовым текстом без пояснений."},
+                                {"role": "user", "content": retry_prompt}
+                            ],
+                            "temperature": 0.5,
+                            "max_tokens": 500
+                        },
+                        timeout=60
+                    )
+                    if response.status_code == 200:
+                        result = response.json()["choices"][0]["message"]["content"].strip()
+                        result = re.sub(r'^#+\s+', '', result, flags=re.MULTILINE)
+                        result = result.strip()
+                        
+                        if len(result) >= 380:
+                            if len(result) > 400:
+                                result = result[:400]
+                            logger.info(f"✅ Текст дополнен до {len(result)} символов (попытка {attempt+1})")
+                            return result
+                    time.sleep(1)
+                except Exception as e:
+                    logger.error(f"Ошибка при дополнении текста: {e}")
+            
+            # Если не получилось, просто дополняем пробелами
+            if len(clean_text) < 400:
+                logger.warning("⚠️ Не удалось дополнить текст через ИИ, дополняю вручную")
+                return clean_text + " " * (400 - len(clean_text))
+        
+        # Если текст длиннее 400 символов
+        logger.info(f"🤖 Создаю краткую версию текста для Telegram (сейчас {len(clean_text)} символов)")
+        
+        # Промпт для создания краткой версии
+        summary_prompt = f"""Напиши краткую версию следующего текста ровно на 400 символов. Сохрани все главные факты и суть. Текст должен быть связным, логичным и заканчиваться законченной мыслью.
+
+Важно:
+- Ровно 400 символов
+- Без троеточия
+- Без смайликов
+- Без символов # и **
+
+Текст для сокращения:
+{clean_text}"""
+
+        # Делаем несколько попыток
+        best_result = None
+        best_len_diff = 999
+        
+        for attempt in range(5):
+            try:
+                logger.info(f"🔄 Попытка {attempt+1}/5")
+                
+                response = requests.post(
                     DEEPSEEK_API_URL,
                     headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"},
                     json={
                         "model": "deepseek-chat",
                         "messages": [
-                            {"role": "system", "content": "Ты редактор. Дополни текст до 400 символов. Ответь только готовым текстом."},
-                            {"role": "user", "content": retry_prompt}
+                            {"role": "system", "content": "Ты редактор. Напиши краткую версию текста ровно на 400 символов. Ответь только готовым текстом без пояснений."},
+                            {"role": "user", "content": summary_prompt}
                         ],
-                        "temperature": 0.5,
+                        "temperature": 0.7 - (attempt * 0.1),  # Постепенно уменьшаем температуру
                         "max_tokens": 500
                     },
                     timeout=60
                 )
-                if retry_response.status_code == 200:
-                    shortened = retry_response.json()["choices"][0]["message"]["content"].strip()
-                    shortened = re.sub(r'^#+\s+', '', shortened, flags=re.MULTILINE)
-                    shortened = shortened.strip()
-                    if len(shortened) > 400:
-                        shortened = shortened[:400]
-                    logger.info(f"📏 После дополнения: {len(shortened)} символов")
-            
-            return shortened
-        else:
-            # Если ИИ не справился, обрезаем вручную
-            logger.warning(f"⚠️ ИИ не справился, обрезаю вручную до 400")
-            if len(clean_text) > 400:
-                cut_pos = clean_text[:400].rfind('.')
+                
+                if response.status_code == 200:
+                    result = response.json()["choices"][0]["message"]["content"].strip()
+                    result = re.sub(r'^#+\s+', '', result, flags=re.MULTILINE)
+                    result = re.sub(r'^Вот.*?:', '', result, flags=re.IGNORECASE)
+                    result = result.strip()
+                    
+                    current_len = len(result)
+                    len_diff = abs(current_len - 400)
+                    
+                    logger.info(f"📏 Попытка {attempt+1}: {current_len} символов (отклонение {len_diff})")
+                    
+                    # Если результат идеальный - сразу возвращаем
+                    if current_len == 400:
+                        logger.info(f"✅ Идеальный результат! 400 символов")
+                        return result
+                    
+                    # Запоминаем лучший результат
+                    if len_diff < best_len_diff:
+                        best_len_diff = len_diff
+                        best_result = result
+                    
+                    # Если отклонение небольшое, корректируем
+                    if len_diff <= 5:
+                        if current_len < 400:
+                            result = result + " " * (400 - current_len)
+                        else:
+                            result = result[:400]
+                        logger.info(f"✅ Результат скорректирован до 400 символов")
+                        return result
+                    
+                    # Если результат слишком короткий, пробуем с другим промптом
+                    if current_len < 350:
+                        summary_prompt = f"""Текст получился слишком коротким ({current_len} символов). Напиши более полную версию на 400 символов, добавив важные детали. Сохрани все главные факты.
+
+Оригинальный текст:
+{clean_text}"""
+                    # Если результат слишком длинный
+                    elif current_len > 450:
+                        summary_prompt = f"""Текст получился слишком длинным ({current_len} символов). Сократи до 400 символов, оставив только самое важное.
+
+Оригинальный текст:
+{clean_text}"""
+                    
+                    time.sleep(0.5)
+                    
+            except Exception as e:
+                logger.error(f"Ошибка в попытке {attempt+1}: {e}")
+                continue
+        
+        # Если после всех попыток есть результат, корректируем его
+        if best_result:
+            if len(best_result) > 400:
+                # Обрезаем по последней точке или пробелу
+                cut_pos = best_result[:400].rfind('.')
                 if cut_pos > 350:
-                    return clean_text[:cut_pos + 1]
+                    best_result = best_result[:cut_pos + 1]
                 else:
-                    return clean_text[:400]
-            return clean_text
+                    cut_pos = best_result[:400].rfind(' ')
+                    if cut_pos > 350:
+                        best_result = best_result[:cut_pos]
+                    else:
+                        best_result = best_result[:400]
+                logger.info(f"📏 Скорректирован до {len(best_result)} символов")
+            elif len(best_result) < 400:
+                best_result = best_result + " " * (400 - len(best_result))
+                logger.info(f"📏 Дополнен до 400 символов")
+            
+            return best_result
+        
+        # Если ничего не получилось, возвращаем обрезанный текст
+        logger.warning("⚠️ Не удалось создать краткую версию через ИИ, обрезаю вручную")
+        if len(clean_text) > 400:
+            return clean_text[:400]
+        return clean_text
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка сокращения текста: {e}")
+        clean_text = clean_html_for_telegram(text)
+        if len(clean_text) > 400:
+            return clean_text[:400]
+        return clean_text
             
     except Exception as e:
         logger.error(f"❌ Ошибка сокращения текста: {e}")
