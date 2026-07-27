@@ -682,11 +682,16 @@ def shorten_text_for_telegram(text):
         logger.info(f"🤖 Отправляю текст в ИИ для сокращения до 400 символов (было {len(clean_text)})")
         shortened = process_text_with_deepseek(clean_text, prompt_type='telegram')
         
-        if shortened and len(shortened) <= 450:
-            logger.info(f"✅ Текст сокращен ИИ до {len(shortened)} символов")
-            return shortened
+        if shortened:
+            # Проверяем длину
+            if len(shortened) <= 400:
+                logger.info(f"✅ Текст сокращен ИИ до {len(shortened)} символов")
+                return shortened
+            else:
+                logger.warning(f"⚠️ ИИ вернул текст длиной {len(shortened)}, обрезаю вручную")
+                return shortened[:397] + "..."
         else:
-            logger.warning(f"⚠️ ИИ вернул текст длиной {len(shortened) if shortened else 0}, обрезаю вручную")
+            logger.warning(f"⚠️ ИИ вернул пустой результат, обрезаю вручную")
             if len(clean_text) > 400:
                 return clean_text[:397] + "..."
             return clean_text
@@ -735,7 +740,8 @@ def publish_to_telegram_channel(title, content, post_link, media_file_id=None, v
         # Сокращаем текст для Telegram через ИИ
         shortened_content = shorten_text_for_telegram(content)
         
-        # Формируем текст с сохранением форматирования        telegram_text = f"<b>{title}</b>\n\n{shortened_content}\n\nПодробнее: {post_link}"
+        # Формируем текст с сохранением форматирования
+        telegram_text = f"<b>{title}</b>\n\n{shortened_content}\n\nПодробнее: {post_link}"
         
         if media_file_id:
             get_file_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile"
@@ -796,7 +802,11 @@ def publish_to_telegram_channel(title, content, post_link, media_file_id=None, v
             
     except Exception as e:
         logger.error(f"❌ Ошибка публикации в Telegram канал: {e}")
+        # Пробуем отправить только текст
         try:
+            # Формируем текст заново
+            shortened_content = shorten_text_for_telegram(content)
+            telegram_text = f"<b>{title}</b>\n\n{shortened_content}\n\nПодробнее: {post_link}"
             return send_text_only_to_telegram(telegram_text)
         except:
             return False
