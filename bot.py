@@ -140,6 +140,18 @@ TELEGRAM_SHORT_PROMPT = """Напиши краткую версию новост
 - Без слов "Заголовок:" и "Текст:"
 - Только готовый текст"""
 
+TELEGRAM_REWRITE_PROMPT = """Перепиши этот текст для Telegram-канала по-другому, сохранив все главные факты и суть. Сделай текст ровно 400 символов. Он должен быть связным, логичным и заканчиваться законченной мыслью.
+
+Важно:
+- Ровно 400 символов
+- Без троеточия
+- Без смайликов
+- Без символов # и **
+- Другой стиль изложения
+- Только готовый текст
+
+Текст для переписывания:"""
+
 # Словарь смайликов по тематикам
 EMOJI_CATEGORIES = {
     # Новости и политика
@@ -284,9 +296,8 @@ def get_emoji_for_text(text):
                 found_emojis.append(emoji)
                 logger.info(f"🔍 Найдено ключевое слово '{keyword}' -> смайлик {emoji}")
         
-        # Если нашли смайлики, возвращаем первый (или самый подходящий)
+        # Если нашли смайлики, возвращаем первый
         if found_emojis:
-            # Если есть несколько, выбираем первый (или можно сделать приоритет)
             return found_emojis[0]
         
         # Если не нашли, используем ИИ для определения смайлика
@@ -313,12 +324,10 @@ def get_emoji_for_text(text):
         
         if response.status_code == 200:
             emoji = response.json()["choices"][0]["message"]["content"].strip()
-            # Проверяем, что это действительно смайлик
             if emoji and len(emoji) <= 2:
                 logger.info(f"✅ ИИ определил смайлик: {emoji}")
                 return emoji
         
-        # Если ничего не подошло, возвращаем стандартный
         return "📰"
         
     except Exception as e:
@@ -708,6 +717,10 @@ def process_text_with_deepseek(text, prompt_type='full'):
             prompt = TELEGRAM_SHORT_PROMPT
             system_prompt = "Ты редактор новостного канала в Telegram. Напиши краткую версию новости ровно 400 символов. Ответь только готовым текстом."
             max_tokens = 600
+        elif prompt_type == 'telegram_rewrite':
+            prompt = TELEGRAM_REWRITE_PROMPT
+            system_prompt = "Ты редактор новостного канала в Telegram. Перепиши текст по-другому, ровно 400 символов. Ответь только готовым текстом."
+            max_tokens = 600
         else:
             prompt = DEEPSEEK_PROMPT
             system_prompt = "Ты редактор новостного сайта. Отвечай только готовым новостным текстом, без пояснений и вступлений."
@@ -722,7 +735,7 @@ def process_text_with_deepseek(text, prompt_type='full'):
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": f"{prompt}\n\n{text}"}
                 ],
-                "temperature": 0.7,
+                "temperature": 0.7 if prompt_type == 'telegram_rewrite' else 0.5,
                 "max_tokens": max_tokens
             },
             timeout=60
@@ -735,8 +748,7 @@ def process_text_with_deepseek(text, prompt_type='full'):
             result = result.strip()
             
             # Для Telegram проверяем длину
-            if prompt_type == 'telegram':
-                # Если текст слишком длинный, просим сократить
+            if prompt_type in ['telegram', 'telegram_rewrite']:
                 if len(result) > 420:
                     logger.info(f"📏 Текст {len(result)} символов, прошу ИИ сократить до 400")
                     retry_prompt = f"""Сократи следующий текст ровно до 400 символов. Сохрани все главные факты и суть. Текст должен быть законченным и логичным.
@@ -762,7 +774,6 @@ def process_text_with_deepseek(text, prompt_type='full'):
                         result = re.sub(r'^#+\s+', '', result, flags=re.MULTILINE)
                         result = result.strip()
                 
-                # Если все еще длиннее 400, обрезаем до последнего предложения
                 if len(result) > 400:
                     cut_pos = result[:400].rfind('.')
                     if cut_pos > 350:
@@ -773,8 +784,6 @@ def process_text_with_deepseek(text, prompt_type='full'):
                             result = result[:cut_pos]
                         else:
                             result = result[:400]
-                
-                # Если текст слишком короткий, дополняем
                 elif len(result) < 380:
                     logger.info(f"📏 Текст {len(result)} символов, прошу ИИ дополнить до 400")
                     retry_prompt = f"""Дополни следующий текст до 400 символов, сохранив стиль и смысл. Добавь важные детали.
@@ -925,21 +934,19 @@ def clean_html_for_telegram(text):
     text = text.strip()
     return text
 
-def shorten_text_for_telegram(text):
+def shorten_text_for_telegram(text, rewrite=False):
     """
     Создает краткую версию текста для Telegram через ИИ (ровно 400 символов)
+    Если rewrite=True - переписывает текст по-другому
     """
     try:
-        # Очищаем текст от HTML
         clean_text = clean_html_for_telegram(text)
         
-        # Если текст уже ровно 400 символов, возвращаем как есть
-        if len(clean_text) == 400:
+        if len(clean_text) == 400 and not rewrite:
             logger.info(f"✅ Текст уже ровно 400 символов")
             return clean_text
         
-        # Если текст короче 400 символов, дополняем его
-        if len(clean_text) < 400:
+        if len(clean_text) < 400 and not rewrite:
             logger.info(f"📏 Текст {len(clean_text)} символов, дополняю до 400")
             retry_prompt = f"""Дополни следующий текст до 400 символов, сохранив стиль и смысл. Добавь важные детали, если их не хватает. Текст должен быть связным и логичным.
 
@@ -976,116 +983,26 @@ def shorten_text_for_telegram(text):
                 except Exception as e:
                     logger.error(f"Ошибка при дополнении текста: {e}")
             
-            # Если не получилось, просто дополняем пробелами
             if len(clean_text) < 400:
                 logger.warning("⚠️ Не удалось дополнить текст через ИИ, дополняю вручную")
                 return clean_text + " " * (400 - len(clean_text))
         
-        # Если текст длиннее 400 символов
-        logger.info(f"🤖 Создаю краткую версию текста для Telegram (сейчас {len(clean_text)} символов)")
+        logger.info(f"🤖 Создаю {'новую' if rewrite else 'краткую'} версию текста для Telegram (сейчас {len(clean_text)} символов)")
         
-        summary_prompt = f"""Напиши краткую версию следующего текста ровно на 400 символов. Сохрани все главные факты и суть. Текст должен быть связным, логичным и заканчиваться законченной мыслью.
-
-Важно:
-- Ровно 400 символов
-- Без троеточия
-- Без смайликов
-- Без символов # и **
-
-Текст для сокращения:
-{clean_text}"""
-
-        best_result = None
-        best_len_diff = 999
+        prompt_type = 'telegram_rewrite' if rewrite else 'telegram'
+        result = process_text_with_deepseek(clean_text, prompt_type=prompt_type)
         
-        for attempt in range(5):
-            try:
-                logger.info(f"🔄 Попытка {attempt+1}/5")
-                
-                response = requests.post(
-                    DEEPSEEK_API_URL,
-                    headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"},
-                    json={
-                        "model": "deepseek-chat",
-                        "messages": [
-                            {"role": "system", "content": "Ты редактор. Напиши краткую версию текста ровно на 400 символов. Ответь только готовым текстом без пояснений."},
-                            {"role": "user", "content": summary_prompt}
-                        ],
-                        "temperature": 0.7 - (attempt * 0.1),
-                        "max_tokens": 500
-                    },
-                    timeout=60
-                )
-                
-                if response.status_code == 200:
-                    result = response.json()["choices"][0]["message"]["content"].strip()
-                    result = re.sub(r'^#+\s+', '', result, flags=re.MULTILINE)
-                    result = re.sub(r'^Вот.*?:', '', result, flags=re.IGNORECASE)
-                    result = result.strip()
-                    
-                    current_len = len(result)
-                    len_diff = abs(current_len - 400)
-                    
-                    logger.info(f"📏 Попытка {attempt+1}: {current_len} символов (отклонение {len_diff})")
-                    
-                    if current_len == 400:
-                        logger.info(f"✅ Идеальный результат! 400 символов")
-                        return result
-                    
-                    if len_diff < best_len_diff:
-                        best_len_diff = len_diff
-                        best_result = result
-                    
-                    if len_diff <= 5:
-                        if current_len < 400:
-                            result = result + " " * (400 - current_len)
-                        else:
-                            result = result[:400]
-                        logger.info(f"✅ Результат скорректирован до 400 символов")
-                        return result
-                    
-                    if current_len < 350:
-                        summary_prompt = f"""Текст получился слишком коротким ({current_len} символов). Напиши более полную версию на 400 символов, добавив важные детали. Сохрани все главные факты.
-
-Оригинальный текст:
-{clean_text}"""
-                    elif current_len > 450:
-                        summary_prompt = f"""Текст получился слишком длинным ({current_len} символов). Сократи до 400 символов, оставив только самое важное.
-
-Оригинальный текст:
-{clean_text}"""
-                    
-                    time.sleep(0.5)
-                    
-            except Exception as e:
-                logger.error(f"Ошибка в попытке {attempt+1}: {e}")
-                continue
+        if result:
+            logger.info(f"✅ {'Переписанный' if rewrite else 'Краткий'} текст: {len(result)} символов")
+            return result
         
-        if best_result:
-            if len(best_result) > 400:
-                cut_pos = best_result[:400].rfind('.')
-                if cut_pos > 350:
-                    best_result = best_result[:cut_pos + 1]
-                else:
-                    cut_pos = best_result[:400].rfind(' ')
-                    if cut_pos > 350:
-                        best_result = best_result[:cut_pos]
-                    else:
-                        best_result = best_result[:400]
-                logger.info(f"📏 Скорректирован до {len(best_result)} символов")
-            elif len(best_result) < 400:
-                best_result = best_result + " " * (400 - len(best_result))
-                logger.info(f"📏 Дополнен до 400 символов")
-            
-            return best_result
-        
-        logger.warning("⚠️ Не удалось создать краткую версию через ИИ, обрезаю вручную")
+        logger.warning("⚠️ Не удалось создать текст через ИИ, обрезаю вручную")
         if len(clean_text) > 400:
             return clean_text[:400]
         return clean_text
             
     except Exception as e:
-        logger.error(f"❌ Ошибка сокращения текста: {e}")
+        logger.error(f"❌ Ошибка обработки текста: {e}")
         clean_text = clean_html_for_telegram(text)
         if len(clean_text) > 400:
             return clean_text[:400]
@@ -1126,17 +1043,12 @@ def publish_to_telegram_channel(title, content, post_link, media_file_id=None, v
         chat_id = get_channel_id()
         logger.info(f"📢 Использую chat_id: {chat_id}")
         
-        # Определяем смайлик для новости
         emoji = get_emoji_for_text(title + " " + content)
         logger.info(f"🎯 Выбран смайлик: {emoji}")
         
-        # Сокращаем текст для Telegram через ИИ до 400 символов
         shortened_content = shorten_text_for_telegram(content)
-        
-        # Формируем текст с сохранением форматирования и смайликом в начале
         telegram_text = f"{emoji} <b>{title}</b>\n\n{shortened_content}\n\nПодробнее: {post_link}"
         
-        # Для видео используем video_file_id, а не media_file_id
         if video_file_id:
             logger.info(f"🎬 Отправляю видео в Telegram канал")
             media_to_send = video_file_id
@@ -1217,11 +1129,9 @@ def preview_telegram_post(title, content, post_link, chat_id, post_key, media_fi
     try:
         logger.info(f"📢 Показываю предпросмотр для публикации в Telegram...")
         
-        # Определяем смайлик для новости
         emoji = get_emoji_for_text(title + " " + content)
         logger.info(f"🎯 Выбран смайлик: {emoji}")
         
-        # Сокращаем текст для Telegram через ИИ до 400 символов
         shortened_content = shorten_text_for_telegram(content)
         
         media_type = "🎬 Видео" if video_file_id else "📸 Фото" if media_file_id else "📝 Текст"
@@ -1232,7 +1142,7 @@ def preview_telegram_post(title, content, post_link, chat_id, post_key, media_fi
         preview_text += f"<b>Текст (400 символов):</b>\n{shortened_content}\n\n"
         preview_text += f"<b>Медиа:</b> {media_type}\n"
         preview_text += f"<b>Ссылка:</b>\n{post_link}\n\n"
-        preview_text += f"<i>⬇️ Нажмите кнопку ниже для публикации в канал</i>"
+        preview_text += f"<i>⬇️ Выберите действие:</i>"
         
         telegram_preview[post_key] = {
             'title': title,
@@ -1247,6 +1157,7 @@ def preview_telegram_post(title, content, post_link, chat_id, post_key, media_fi
         
         keyboard = {
             "inline_keyboard": [
+                [{"text": "🔄 Переделать текст через ИИ", "callback_data": f"rewrite_telegram|{post_key}"}],
                 [{"text": "📤 Опубликовать в канал", "callback_data": f"confirm_telegram|{post_key}"}],
                 [{"text": "❌ Отмена", "callback_data": f"cancel_telegram|{post_key}"}]
             ]
@@ -1333,6 +1244,61 @@ def send_preview_without_media(chat_id, preview_text, keyboard):
         logger.error(f"❌ Ошибка отправки предпросмотра: {e}")
         return False
 
+def rewrite_telegram_text(post_key, chat_id, message_id):
+    """Переписывает текст для Telegram через ИИ"""
+    try:
+        if post_key not in telegram_preview:
+            logger.error(f"❌ Пост {post_key} не найден в предпросмотре")
+            return False
+        
+        post_data = telegram_preview[post_key]
+        title = post_data['title']
+        content = post_data['content']
+        
+        logger.info(f"🔄 Переписываю текст для Telegram через ИИ...")
+        
+        # Создаем новую версию текста
+        new_content = shorten_text_for_telegram(content, rewrite=True)
+        
+        if new_content:
+            # Обновляем данные в предпросмотре
+            telegram_preview[post_key]['content'] = content  # Сохраняем оригинал
+            telegram_preview[post_key]['rewritten_content'] = new_content
+            
+            emoji = post_data.get('emoji', get_emoji_for_text(title + " " + content))
+            media_type = "🎬 Видео" if post_data.get('video_file_id') else "📸 Фото" if post_data.get('media_file_id') else "📝 Текст"
+            
+            preview_text = f"<b>📢 ПРЕДПРОСМОТР ПУБЛИКАЦИИ В КАНАЛ (НОВАЯ ВЕРСИЯ)</b>\n\n"
+            preview_text += f"<b>Смайлик:</b> {emoji}\n"
+            preview_text += f"<b>Заголовок:</b>\n{title}\n\n"
+            preview_text += f"<b>Новый текст (400 символов):</b>\n{new_content}\n\n"
+            preview_text += f"<b>Медиа:</b> {media_type}\n"
+            preview_text += f"<b>Ссылка:</b>\n{post_data['post_link']}\n\n"
+            preview_text += f"<i>⬇️ Выберите действие:</i>"
+            
+            keyboard = {
+                "inline_keyboard": [
+                    [{"text": "🔄 Еще раз переделать", "callback_data": f"rewrite_telegram|{post_key}"}],
+                    [{"text": "📤 Опубликовать в канал", "callback_data": f"confirm_telegram|{post_key}"}],
+                    [{"text": "❌ Отмена", "callback_data": f"cancel_telegram|{post_key}"}]
+                ]
+            }
+            
+            try:
+                tg_edit_message_text(chat_id, message_id, preview_text, json.dumps(keyboard))
+                logger.info(f"✅ Предпросмотр обновлен с новым текстом")
+                return True
+            except Exception as e:
+                logger.error(f"❌ Ошибка обновления предпросмотра: {e}")
+                return False
+        else:
+            tg_send_message(chat_id, "❌ Не удалось переделать текст через ИИ")
+            return False
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка переписывания текста: {e}")
+        return False
+
 def confirm_telegram_publish(post_key):
     """Подтверждение и публикация в Telegram канал"""
     try:
@@ -1343,9 +1309,12 @@ def confirm_telegram_publish(post_key):
         post_data = telegram_preview[post_key]
         chat_id = post_data.get('chat_id')
         
+        # Используем переписанный текст, если он есть
+        content_to_publish = post_data.get('rewritten_content', post_data['content'])
+        
         success = publish_to_telegram_channel(
             title=post_data['title'],
-            content=post_data['content'],
+            content=content_to_publish,
             post_link=post_data['post_link'],
             media_file_id=post_data.get('media_file_id'),
             video_file_id=post_data.get('video_file_id'),
@@ -1554,6 +1523,17 @@ def process_update(update_json):
             
             parts = data.split('|')
             action = parts[0]
+            
+            # НОВЫЙ ОБРАБОТЧИК: Переписывание текста для Telegram
+            if action == 'rewrite_telegram' and len(parts) >= 2:
+                post_key = parts[1]
+                tg_send_message(chat_id, "🔄 Переписываю текст через ИИ...")
+                
+                if rewrite_telegram_text(post_key, chat_id, msg_id):
+                    tg_send_message(chat_id, "✅ Текст переписан! Обновите предпросмотр.")
+                else:
+                    tg_send_message(chat_id, "❌ Ошибка переписывания текста")
+                return
             
             if action == 'confirm_telegram' and len(parts) >= 2:
                 post_key = parts[1]
