@@ -27,6 +27,10 @@ WP_PASSWORD = os.getenv('WP_PASSWORD')
 ADMIN_ID = os.getenv('YOUR_TELEGRAM_ID')
 DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
 
+# НОВЫЕ ПЕРЕМЕННЫЕ ДЛЯ ДИЗАЙН-БОТА
+DESIGN_BOT_TOKEN = os.getenv('DESIGN_BOT_TOKEN')
+DESIGN_BOT_USERNAME = os.getenv('DESIGN_BOT_USERNAME')
+
 # API DeepSeek
 DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
 
@@ -281,58 +285,122 @@ EMOJI_CATEGORIES = {
     "доставка": "🚚",
 }
 
-def get_emoji_for_text(text):
+# ============ НОВАЯ ФУНКЦИЯ: ОТПРАВКА В ДИЗАЙН-БОТ ============
+
+def send_to_design_bot(title, content, post_link, media_file_id=None, video_file_id=None, 
+                       post_type=None, category_slug=None, gallery_ids=None, original_text=None):
     """
-    Определяет подходящий смайлик для текста новости
+    Отправляет пост в бот-оформитель.
+    Дизайн-бот получит сообщение и пришлет вам кнопку "оформить"
     """
     try:
-        # Приводим текст к нижнему регистру
-        text_lower = text.lower()
+        if not DESIGN_BOT_TOKEN:
+            logger.warning("⚠️ Дизайн-бот не настроен (нет токена), пропускаем отправку")
+            return False
         
-        # Проверяем все ключевые слова
-        found_emojis = []
-        for keyword, emoji in EMOJI_CATEGORIES.items():
-            if keyword in text_lower:
-                found_emojis.append(emoji)
-                logger.info(f"🔍 Найдено ключевое слово '{keyword}' -> смайлик {emoji}")
+        logger.info(f"🎨 Отправляю пост в дизайн-бот...")
         
-        # Если нашли смайлики, возвращаем первый
-        if found_emojis:
-            return found_emojis[0]
+        design_bot_api = f"https://api.telegram.org/bot{DESIGN_BOT_TOKEN}"
         
-        # Если не нашли, используем ИИ для определения смайлика
-        logger.info("🤖 Использую ИИ для определения смайлика")
-        emoji_prompt = f"""Определи один подходящий смайлик (эмодзи) для этой новости. Ответь только смайликом, без пояснений.
-
-Текст новости:
-{text[:500]}"""
-
-        response = requests.post(
-            DEEPSEEK_API_URL,
-            headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"},
-            json={
-                "model": "deepseek-chat",
-                "messages": [
-                    {"role": "system", "content": "Ты помощник. Определи один подходящий смайлик для текста. Ответь только смайликом."},
-                    {"role": "user", "content": emoji_prompt}
+        # Формируем сообщение для дизайн-бота
+        message_text = f"📝 <b>НОВАЯ НОВОСТЬ ДЛЯ ОФОРМЛЕНИЯ</b>\n\n"
+        message_text += f"<b>Заголовок:</b>\n{title}\n\n"
+        
+        # Если есть полный текст новости
+        if original_text:
+            message_text += f"<b>Полный текст:</b>\n{original_text}\n\n"
+        else:
+            message_text += f"<b>Текст:</b>\n{content[:500]}...\n\n"
+        
+        # Добавляем информацию о разделе
+        if post_type:
+            section_name = POST_TYPES.get(post_type, post_type)
+            message_text += f"<b>Раздел:</b> {section_name}\n"
+        
+        # Добавляем рубрику
+        if category_slug and post_type:
+            cat_data = CATEGORIES.get(post_type, {}).get(category_slug, {})
+            category_name = cat_data.get('name', category_slug)
+            message_text += f"<b>Рубрика:</b> {category_name}\n"
+        
+        # Информация о медиа
+        media_info = []
+        if video_file_id:
+            media_info.append("🎬 Видео")
+        if media_file_id:
+            media_info.append("📸 Фото (обложка)")
+        if gallery_ids and len(gallery_ids) > 0:
+            media_info.append(f"🖼️ Галерея ({len(gallery_ids)} фото)")
+        
+        if media_info:
+            message_text += f"<b>Медиа:</b> {', '.join(media_info)}\n"
+        
+        message_text += f"\n<b>Ссылка на сайт:</b>\n{post_link}\n\n"
+        message_text += f"<i>⬇️ Нажмите кнопку для оформления</i>"
+        
+        # Создаем клавиатуру с кнопкой "Оформить"
+        keyboard = {
+            "inline_keyboard": [
+                [
+                    {"text": "🎨 Оформить новость", "callback_data": f"design_post|{post_link}"}
                 ],
-                "temperature": 0.3,
-                "max_tokens": 50
-            },
-            timeout=30
-        )
+                [
+                    {"text": "📝 Редактировать", "callback_data": f"edit_post|{post_link}"}
+                ]
+            ]
+        }
         
-        if response.status_code == 200:
-            emoji = response.json()["choices"][0]["message"]["content"].strip()
-            if emoji and len(emoji) <= 2:
-                logger.info(f"✅ ИИ определил смайлик: {emoji}")
-                return emoji
+        # Определяем chat_id для отправки
+        chat_id = DESIGN_BOT_USERNAME if DESIGN_BOT_USERNAME else ADMIN_ID
         
-        return "📰"
+        # Отправляем сообщение в дизайн-бот
+        if video_file_id:
+            # Отправляем видео
+            send_url = f"{design_bot_api}/sendVideo"
+            data = {
+                'chat_id': chat_id,
+                'video': video_file_id,
+                'caption': message_text,
+                'parse_mode': 'HTML',
+                'reply_markup': json.dumps(keyboard)
+            }
+            response = requests.post(send_url, data=data, timeout=60)
+            
+        elif media_file_id:
+            # Отправляем фото
+            send_url = f"{design_bot_api}/sendPhoto"
+            data = {
+                'chat_id': chat_id,
+                'photo': media_file_id,
+                'caption': message_text,
+                'parse_mode': 'HTML',
+                'reply_markup': json.dumps(keyboard)
+            }
+            response = requests.post(send_url, data=data, timeout=60)
+            
+        else:
+            # Отправляем только текст
+            send_url = f"{design_bot_api}/sendMessage"
+            data = {
+                'chat_id': chat_id,
+                'text': message_text,
+                'parse_mode': 'HTML',
+                'reply_markup': json.dumps(keyboard)
+            }
+            response = requests.post(send_url, json=data, timeout=60)
         
+        if response.status_code in [200, 201]:
+            logger.info(f"✅ Пост отправлен в дизайн-бот")
+            logger.info(f"📨 Дизайн-бот пришлет вам уведомление 'оформить'")
+            return True
+        else:
+            logger.error(f"❌ Ошибка отправки в дизайн-бот: {response.status_code}")
+            logger.error(f"Ответ: {response.text[:200]}")
+            return False
+            
     except Exception as e:
-        logger.error(f"❌ Ошибка определения смайлика: {e}")
-        return "📰"
+        logger.error(f"❌ Ошибка отправки в дизайн-бот: {e}")
+        return False
 
 # ============ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ============
 
@@ -1356,6 +1424,7 @@ def publish_scheduled_post(post_key):
         content = post_data.get('content', '')
         category_slug = post_data.get('category_slug')
         is_video = post_data.get('is_video', False)
+        original_text = post_data.get('original_text', '')
         
         video_url = None
         
@@ -1423,9 +1492,22 @@ def publish_scheduled_post(post_key):
         if success:
             tg_send_message(chat_id, f"✅ Пост опубликован по расписанию!\n\n{link}")
             
+            # ========== ОТПРАВЛЯЕМ В ДИЗАЙН-БОТ ==========
             media_file_id = post_data.get('media_file_id')
             video_file_id = post_data.get('video_file_id')
             gallery_file_ids = post_data.get('gallery_file_ids', [])
+            
+            send_to_design_bot(
+                title=title,
+                content=content,
+                post_link=link,
+                media_file_id=media_file_id,
+                video_file_id=video_file_id,
+                post_type=post_type,
+                category_slug=category_slug,
+                gallery_ids=gallery_ids,
+                original_text=original_text
+            )
             
             preview_telegram_post(
                 title=title,
@@ -1659,6 +1741,7 @@ def process_update(update_json):
                 video_file_id = post_data.get('video_file_id')
                 gallery_file_ids = post_data.get('gallery_file_ids', [])
                 title = post_data.get('title', '')
+                original_text = post_data.get('original_text', '')
                 
                 featured_media_id = None
                 video_media_id = None
@@ -1704,7 +1787,8 @@ def process_update(update_json):
                     'gallery_ids': gallery_ids,
                     'media_file_id': media_file_id,
                     'video_file_id': video_file_id,
-                    'gallery_file_ids': gallery_file_ids
+                    'gallery_file_ids': gallery_file_ids,
+                    'original_text': original_text
                 }
                 
                 timer = threading.Timer(minutes * 60, publish_scheduled_post, args=[post_key])
@@ -1776,6 +1860,7 @@ def process_update(update_json):
                 post_type = post_data.get('post_type', 'news')
                 content = post_data.get('content', '')
                 category_slug = post_data.get('category_slug')
+                original_text = post_data.get('original_text', '')
                 
                 video_url = None
                 gallery_ids = []
@@ -1833,6 +1918,19 @@ def process_update(update_json):
                 if success:
                     tg_send_message(chat_id, f"✅ Пост опубликован на сайте!\n\n{link}")
                     
+                    # ========== ОТПРАВЛЯЕМ В ДИЗАЙН-БОТ ==========
+                    send_to_design_bot(
+                        title=title,
+                        content=content,
+                        post_link=link,
+                        media_file_id=media_file_id,
+                        video_file_id=video_file_id,
+                        post_type=post_type,
+                        category_slug=category_slug,
+                        gallery_ids=gallery_ids,
+                        original_text=original_text
+                    )
+                    
                     logger.info(f"📢 Показываем предпросмотр для Telegram...")
                     preview_telegram_post(
                         title=title,
@@ -1873,6 +1971,7 @@ def process_update(update_json):
                 post_type = post_data.get('post_type', 'news')
                 content = post_data.get('content', '')
                 category_slug = post_data.get('category_slug')
+                original_text = post_data.get('original_text', '')
                 
                 video_url = None
                 gallery_ids = []
@@ -1929,6 +2028,19 @@ def process_update(update_json):
                 
                 if success:
                     tg_send_message(chat_id, f"✅ Пост сохранен в черновиках!\n\n{link}")
+                    
+                    # ========== ОТПРАВЛЯЕМ В ДИЗАЙН-БОТ (ЧЕРНОВИК) ==========
+                    send_to_design_bot(
+                        title=title,
+                        content=content,
+                        post_link=link,
+                        media_file_id=media_file_id,
+                        video_file_id=video_file_id,
+                        post_type=post_type,
+                        category_slug=category_slug,
+                        gallery_ids=gallery_ids,
+                        original_text=original_text
+                    )
                 else:
                     tg_send_message(chat_id, "❌ Ошибка сохранения")
                 
@@ -2130,6 +2242,7 @@ if __name__ == '__main__':
     logger.info(f"📢 Канал: {CHANNEL_ID}")
     logger.info(f"👤 Админ ID: {ADMIN_ID}")
     logger.info(f"🤖 DeepSeek: {'✅' if DEEPSEEK_API_KEY else '❌'}")
+    logger.info(f"🎨 Дизайн-бот: {'✅' if DESIGN_BOT_TOKEN else '❌'}")
     logger.info(f"📂 Доступные разделы: {', '.join(POST_TYPES.values())}")
     
     try:
