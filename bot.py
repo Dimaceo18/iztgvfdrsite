@@ -9,10 +9,9 @@ from dotenv import load_dotenv
 from collections import defaultdict
 import threading
 from datetime import datetime, timedelta
-from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+from PIL import Image, ImageEnhance, ImageFilter
 import io
 import random
-import numpy as np
 
 load_dotenv()
 
@@ -103,15 +102,6 @@ CATEGORIES = {
     }
 }
 
-TAXONOMY_MAP = {
-    "news": "news_category",
-    "sport": "sport_category",
-    "realt": "realt_category",
-    "auto": "auto_category",
-    "afisha": "afisha_category",
-    "sales": "sales_category"
-}
-
 app = Flask(__name__)
 wp_session = requests.Session()
 
@@ -155,7 +145,6 @@ TELEGRAM_REWRITE_PROMPT = """Перепиши этот текст для Telegra
 
 # Словарь смайликов по тематикам
 EMOJI_CATEGORIES = {
-    # Новости и политика
     "политика": "🏛️",
     "власть": "🏛️",
     "правительство": "🏛️",
@@ -163,145 +152,69 @@ EMOJI_CATEGORIES = {
     "выборы": "🗳️",
     "закон": "⚖️",
     "суд": "⚖️",
-    "решение": "📋",
-    "указ": "📜",
-    "постановление": "📜",
-    
-    # Экономика и финансы
     "деньги": "💰",
     "финансы": "💰",
     "экономика": "📊",
     "бюджет": "💰",
     "цена": "💲",
     "курс": "💱",
-    "валюта": "💱",
-    "налоги": "🧾",
-    "зарплата": "💵",
-    "пенсия": "💵",
-    "инфляция": "📈",
-    "кризис": "📉",
-    
-    # Происшествия
     "происшествие": "🚨",
     "авария": "🚗💥",
     "дтп": "🚗💥",
     "пожар": "🔥",
     "взрыв": "💥",
     "чп": "⚠️",
-    "катастрофа": "❗",
-    "стихия": "🌪️",
-    "наводнение": "🌊",
-    "землетрясение": "🌋",
-    
-    # Город и инфраструктура
     "город": "🏙️",
     "стройка": "🏗️",
     "ремонт": "🔨",
     "дорога": "🛣️",
     "транспорт": "🚌",
     "метро": "🚇",
-    "ЖКХ": "🏢",
-    "коммунальный": "🔧",
-    "благоустройство": "🌳",
-    
-    # Здоровье и медицина
     "здоровье": "💊",
     "медицина": "🏥",
     "больница": "🏥",
-    "вирус": "🦠",
-    "вакцина": "💉",
-    "пандемия": "🦠",
-    "лечение": "💊",
-    "врач": "👨‍⚕️",
-    
-    # Спорт
     "спорт": "⚽",
     "футбол": "⚽",
     "хоккей": "🏒",
     "теннис": "🎾",
     "бокс": "🥊",
-    "единоборства": "🥊",
-    "лыжи": "⛷️",
-    "фигурное катание": "⛸️",
-    "олимпиада": "🏅",
-    "чемпионат": "🏆",
-    "матч": "⚽",
-    "игра": "🎯",
-    
-    # Культура и искусство
     "культура": "🎭",
     "искусство": "🎨",
     "выставка": "🖼️",
     "музей": "🏛️",
     "театр": "🎭",
-    "спектакль": "🎭",
     "кино": "🎬",
-    "фильм": "🎬",
     "концерт": "🎵",
-    "музыка": "🎵",
     "фестиваль": "🎪",
-    
-    # Образование
     "школа": "🏫",
     "университет": "🎓",
     "образование": "📚",
-    "учеба": "📖",
-    "экзамен": "📝",
-    
-    # Технологии и наука
     "наука": "🔬",
     "технологии": "💻",
     "интернет": "🌐",
-    "телефон": "📱",
-    "гаджет": "📱",
-    "компьютер": "💻",
-    "робот": "🤖",
-    "космос": "🚀",
-    
-    # Погода
     "погода": "🌤️",
     "дождь": "🌧️",
     "снег": "❄️",
     "солнце": "☀️",
-    "ветер": "💨",
-    "мороз": "🥶",
-    "жара": "🥵",
-    
-    # Разное
     "новость": "📰",
     "событие": "📅",
     "выходной": "🎉",
     "праздник": "🎊",
-    "скандал": "💥",
-    "инцидент": "⚠️",
-    "работа": "💼",
-    "бизнес": "💼",
-    "туризм": "✈️",
-    "путешествие": "✈️",
-    "еда": "🍽️",
-    "доставка": "🚚",
 }
 
 def get_emoji_for_text(text):
-    """
-    Определяет подходящий смайлик для текста новости
-    """
+    """Определяет подходящий смайлик для текста новости"""
     try:
-        # Приводим текст к нижнему регистру
         text_lower = text.lower()
-        
-        # Проверяем все ключевые слова
         found_emojis = []
         for keyword, emoji in EMOJI_CATEGORIES.items():
             if keyword in text_lower:
                 found_emojis.append(emoji)
                 logger.info(f"🔍 Найдено ключевое слово '{keyword}' -> смайлик {emoji}")
         
-        # Если нашли смайлики, возвращаем первый
         if found_emojis:
             return found_emojis[0]
         
-        # Если не нашли, используем ИИ для определения смайлика
         logger.info("🤖 Использую ИИ для определения смайлика")
         emoji_prompt = f"""Определи один подходящий смайлик (эмодзи) для этой новости. Ответь только смайликом, без пояснений.
 
@@ -337,31 +250,6 @@ def get_emoji_for_text(text):
 
 # ============ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ============
 
-def add_noise_to_image(image, noise_level=0.1):
-    """
-    Добавляет шум к изображению
-    noise_level - уровень шума (0.1 = 10%)
-    """
-    try:
-        logger.info(f"📸 Добавляем шум {noise_level*100}% к изображению")
-        
-        # Конвертируем в numpy массив
-        img_array = np.array(image)
-        
-        # Добавляем шум
-        noise = np.random.normal(0, noise_level * 255, img_array.shape)
-        noisy_array = np.clip(img_array + noise, 0, 255).astype(np.uint8)
-        
-        # Конвертируем обратно в PIL Image
-        noisy_image = Image.fromarray(noisy_array)
-        
-        logger.info(f"✅ Шум добавлен успешно")
-        return noisy_image
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка добавления шума: {e}")
-        return image
-
 def get_channel_id():
     """Получает правильный ID канала"""
     try:
@@ -379,7 +267,6 @@ def get_channel_id():
             return chat_id
         else:
             logger.error(f"❌ Ошибка получения ID канала: {response.status_code}")
-            logger.error(f"Ответ: {response.text}")
             return CHANNEL_ID
     except Exception as e:
         logger.error(f"❌ Ошибка получения ID канала: {e}")
@@ -430,19 +317,14 @@ def get_category_id(post_type, category_slug):
         logger.warning(f"⚠️ Рубрика {category_slug} не найдена в словаре")
     return None
 
-def set_post_categories(post_id, post_type, category_ids):
-    """Установка категорий для поста"""
+def set_post_categories(post_id, category_ids):
+    """Установка категорий для поста через стандартную таксономию WordPress"""
     try:
-        # Используем стандартную таксономию 'category' для всех постов
-        # Это ключевое исправление!
-        taxonomy = "category"  # Используем стандартную таксономию
-        
         logger.info(f"📂 Устанавливаю рубрики для поста {post_id}")
-        logger.info(f"   Таксономия: {taxonomy}")
         logger.info(f"   ID рубрик: {category_ids}")
         
-        # Устанавливаем рубрики через стандартный эндпоинт
-        post_url = f"{WP_API_URL}/{post_type}/{post_id}"
+        # Используем стандартный эндпоинт для обновления поста
+        post_url = f"{WP_API_URL}/posts/{post_id}"
         
         # Получаем текущий пост
         get_response = wp_session.get(
@@ -534,9 +416,13 @@ def unique_image(image_bytes, is_video_thumbnail=False):
         if image.mode in ('RGBA', 'LA', 'P'):
             image = image.convert('RGB')
         
-        # Всегда добавляем шум 10%
+        # Добавляем шум 10%
         logger.info("📸 Добавляем 10% шума к изображению")
-        image = add_noise_to_image(image, noise_level=0.1)
+        import numpy as np
+        img_array = np.array(image)
+        noise = np.random.normal(0, 0.1 * 255, img_array.shape)
+        noisy_array = np.clip(img_array + noise, 0, 255).astype(np.uint8)
+        image = Image.fromarray(noisy_array)
         
         method = random.choice([
             'resize_sharpen',
@@ -792,7 +678,7 @@ def process_text_with_deepseek(text, prompt_type='full'):
             result = re.sub(r'^#+\s+', '', result, flags=re.MULTILINE)
             result = result.strip()
             
-            # Для Telegram проверяем длину (500 символов)
+            # Для Telegram проверяем длину
             if prompt_type in ['telegram', 'telegram_rewrite']:
                 if len(result) > 520:
                     logger.info(f"📏 Текст {len(result)} символов, прошу ИИ сократить до 500")
@@ -863,7 +749,7 @@ def process_text_with_deepseek(text, prompt_type='full'):
         return None
 
 def create_wp_post(title, content, post_type, category_slug=None, media_id=None, publish=False, video_url=None, is_video=False, gallery_ids=None, schedule_time=None):
-    """Создание поста в WordPress"""
+    """Создание поста в WordPress с правильной установкой рубрики"""
     status = 'future' if schedule_time else ('publish' if publish else 'draft')
     
     final_content = content
@@ -892,6 +778,15 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
         }
     }
     
+    # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Добавляем категорию в post_data ДО отправки
+    if category_slug:
+        category_id = get_category_id(post_type, category_slug)
+        if category_id:
+            post_data['categories'] = [category_id]
+            logger.info(f"📂 Добавляю категорию ID={category_id} в post_data")
+        else:
+            logger.warning(f"⚠️ Рубрика {category_slug} не найдена, категория не будет добавлена")
+    
     if schedule_time:
         post_data['date'] = schedule_time.isoformat()
         logger.info(f"⏰ Запланирована публикация на {schedule_time.strftime('%d.%m.%Y %H:%M')}")
@@ -899,13 +794,6 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
     if media_id and isinstance(media_id, int):
         post_data['featured_media'] = media_id
         logger.info(f"📎 Устанавливаю обложку WP ID={media_id}")
-    
-    # Добавляем категорию, если указана
-    if category_slug:
-        category_id = get_category_id(post_type, category_slug)
-        if category_id:
-            post_data['categories'] = [category_id]
-            logger.info(f"📂 Добавляю категорию ID={category_id}")
     
     try:
         headers = {
@@ -915,9 +803,9 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
         }
         
         logger.info(f"📤 Отправка в WordPress: раздел={post_type}, статус={status}")
+        logger.info(f"📂 Категория: {category_slug} (ID: {post_data.get('categories', 'Нет')})")
         logger.info(f"🔍 SEO Заголовок: {seo_title}")
         logger.info(f"🔍 SEO Описание: {seo_description[:100]}...")
-        logger.info(f"📂 Категория: {category_slug}")
         
         response = wp_session.post(
             f"{WP_API_URL}/{post_type}",
@@ -932,9 +820,8 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
             post_link = response.json()['link']
             logger.info(f"✅ Пост создан: {post_link} (ID: {post_id})")
             
-            # Дополнительная проверка установки категории
+            # Проверяем, что категория установлена
             if category_slug and category_id:
-                # Проверяем, установилась ли категория
                 check_response = wp_session.get(
                     f"{WP_API_URL}/{post_type}/{post_id}",
                     auth=(WP_USERNAME, WP_PASSWORD),
@@ -944,11 +831,12 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
                     post_check = check_response.json()
                     categories = post_check.get('categories', [])
                     if category_id in categories:
-                        logger.info(f"✅ Категория успешно установлена!")
+                        logger.info(f"✅ Категория {category_id} успешно установлена!")
                     else:
                         logger.warning(f"⚠️ Категория не установлена. Текущие категории: {categories}")
                         # Пробуем установить повторно
-                        set_post_categories(post_id, post_type, [category_id])
+                        logger.info(f"🔄 Пробую установить категорию повторно...")
+                        set_post_categories(post_id, [category_id])
             
             logger.info(f"✅ SEO данные добавлены в Yoast")
             return True, post_link, post_id
@@ -988,7 +876,7 @@ def get_action_keyboard(post_key):
 # ============ ФУНКЦИИ ДЛЯ TELEGRAM ============
 
 def clean_html_for_telegram(text):
-    """Очищает HTML теги и форматирует текст для Telegram, сохраняя абзацы"""
+    """Очищает HTML теги и форматирует текст для Telegram"""
     text = re.sub(r'<[^>]+>', '', text)
     text = re.sub(r'\[video[^\]]*\]', '', text)
     text = re.sub(r'\[gallery[^\]]*\]', '', text)
@@ -999,10 +887,7 @@ def clean_html_for_telegram(text):
     return text
 
 def shorten_text_for_telegram(text, rewrite=False):
-    """
-    Создает краткую версию текста для Telegram через ИИ (ровно 500 символов)
-    Если rewrite=True - переписывает текст по-другому
-    """
+    """Создает краткую версию текста для Telegram через ИИ (ровно 500 символов)"""
     try:
         clean_text = clean_html_for_telegram(text)
         
@@ -1089,14 +974,13 @@ def send_text_only_to_telegram(text):
             return True
         else:
             logger.error(f"❌ Ошибка публикации текста в канал: {response.status_code}")
-            logger.error(f"Ответ: {response.text}")
             return False
     except Exception as e:
         logger.error(f"❌ Ошибка отправки текста: {e}")
         return False
 
 def publish_to_telegram_channel(title, content, post_link, media_file_id=None, video_file_id=None, gallery_file_ids=None):
-    """Публикует пост в Telegram канал с сокращением текста до 500 символов и смайликом"""
+    """Публикует пост в Telegram канал с сокращением текста до 500 символов"""
     try:
         logger.info(f"📢 Начинаю публикацию в Telegram канал...")
         
@@ -1111,8 +995,6 @@ def publish_to_telegram_channel(title, content, post_link, media_file_id=None, v
         logger.info(f"🎯 Выбран смайлик: {emoji}")
         
         shortened_content = shorten_text_for_telegram(content)
-        
-        # Формируем текст с ссылкой в конце
         telegram_text = f"{emoji} <b>{title}</b>\n\n{shortened_content}\n\n📖 Читать статью полностью на нашем сайте: {post_link}"
         
         if video_file_id:
@@ -1163,7 +1045,6 @@ def publish_to_telegram_channel(title, content, post_link, media_file_id=None, v
                                 return True
                             else:
                                 logger.error(f"❌ Ошибка публикации в канал: {response.status_code}")
-                                logger.error(f"Ответ: {response.text}")
                                 return send_text_only_to_telegram(telegram_text)
                         else:
                             logger.error(f"❌ Ошибка скачивания медиа: {media_response.status_code}")
@@ -1206,8 +1087,8 @@ def preview_telegram_post(title, content, post_link, chat_id, post_key, media_fi
         preview_text += f"<b>Смайлик:</b> {emoji}\n"
         preview_text += f"<b>Заголовок:</b>\n{title}\n\n"
         preview_text += f"<b>Текст (500 символов):</b>\n{shortened_content}\n\n"
+        preview_text += f"<b>Медиа:</b> {media_type}\n"
         preview_text += f"<b>Ссылка:</b>\n{post_link}\n\n"
-        preview_text += f"<b>Медиа:</b> {media_type}\n\n"
         preview_text += f"<i>⬇️ Выберите действие:</i>"
         
         telegram_preview[post_key] = {
@@ -1323,12 +1204,10 @@ def rewrite_telegram_text(post_key, chat_id, message_id):
         
         logger.info(f"🔄 Переписываю текст для Telegram через ИИ...")
         
-        # Создаем новую версию текста
         new_content = shorten_text_for_telegram(content, rewrite=True)
         
         if new_content:
-            # Обновляем данные в предпросмотре
-            telegram_preview[post_key]['content'] = content  # Сохраняем оригинал
+            telegram_preview[post_key]['content'] = content
             telegram_preview[post_key]['rewritten_content'] = new_content
             
             emoji = post_data.get('emoji', get_emoji_for_text(title + " " + content))
@@ -1338,8 +1217,8 @@ def rewrite_telegram_text(post_key, chat_id, message_id):
             preview_text += f"<b>Смайлик:</b> {emoji}\n"
             preview_text += f"<b>Заголовок:</b>\n{title}\n\n"
             preview_text += f"<b>Новый текст (500 символов):</b>\n{new_content}\n\n"
+            preview_text += f"<b>Медиа:</b> {media_type}\n"
             preview_text += f"<b>Ссылка:</b>\n{post_data['post_link']}\n\n"
-            preview_text += f"<b>Медиа:</b> {media_type}\n\n"
             preview_text += f"<i>⬇️ Выберите действие:</i>"
             
             keyboard = {
@@ -1375,7 +1254,6 @@ def confirm_telegram_publish(post_key):
         post_data = telegram_preview[post_key]
         chat_id = post_data.get('chat_id')
         
-        # Используем переписанный текст, если он есть
         content_to_publish = post_data.get('rewritten_content', post_data['content'])
         
         success = publish_to_telegram_channel(
@@ -1408,7 +1286,6 @@ def publish_scheduled_post(post_key):
     
     post_data = scheduled_posts[post_key]
     chat_id = post_data.get('chat_id')
-    msg_id = post_data.get('msg_id')
     
     logger.info(f"⏰ Время публикации для поста {post_key}!")
     
@@ -1590,7 +1467,6 @@ def process_update(update_json):
             parts = data.split('|')
             action = parts[0]
             
-            # НОВЫЙ ОБРАБОТЧИК: Переписывание текста для Telegram
             if action == 'rewrite_telegram' and len(parts) >= 2:
                 post_key = parts[1]
                 tg_send_message(chat_id, "🔄 Переписываю текст через ИИ...")
