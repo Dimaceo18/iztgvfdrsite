@@ -9,9 +9,10 @@ from dotenv import load_dotenv
 from collections import defaultdict
 import threading
 from datetime import datetime, timedelta
-from PIL import Image, ImageEnhance, ImageFilter
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 import io
 import random
+import numpy as np
 
 load_dotenv()
 
@@ -130,20 +131,20 @@ DEEPSEEK_PROMPT = """Ты редактор новостного сайта. Пе
 
 ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст."""
 
-TELEGRAM_SHORT_PROMPT = """Напиши краткую версию новости ровно на 400 символов. Сохрани все главные факты и суть. Текст должен быть связным, логичным и заканчиваться законченной мыслью.
+TELEGRAM_SHORT_PROMPT = """Напиши краткую версию новости ровно на 500 символов. Сохрани все главные факты и суть. Текст должен быть связным, логичным и заканчиваться законченной мыслью.
 
 Важно:
-- Ровно 400 символов
+- Ровно 500 символов
 - Без троеточия
 - Без смайликов
 - Без символов # и **
 - Без слов "Заголовок:" и "Текст:"
 - Только готовый текст"""
 
-TELEGRAM_REWRITE_PROMPT = """Перепиши этот текст для Telegram-канала по-другому, сохранив все главные факты и суть. Сделай текст ровно 400 символов. Он должен быть связным, логичным и заканчиваться законченной мыслью.
+TELEGRAM_REWRITE_PROMPT = """Перепиши этот текст для Telegram-канала по-другому, сохранив все главные факты и суть. Сделай текст ровно 500 символов. Он должен быть связным, логичным и заканчиваться законченной мыслью.
 
 Важно:
-- Ровно 400 символов
+- Ровно 500 символов
 - Без троеточия
 - Без смайликов
 - Без символов # и **
@@ -336,6 +337,31 @@ def get_emoji_for_text(text):
 
 # ============ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ============
 
+def add_noise_to_image(image, noise_level=0.1):
+    """
+    Добавляет шум к изображению
+    noise_level - уровень шума (0.1 = 10%)
+    """
+    try:
+        logger.info(f"📸 Добавляем шум {noise_level*100}% к изображению")
+        
+        # Конвертируем в numpy массив
+        img_array = np.array(image)
+        
+        # Добавляем шум
+        noise = np.random.normal(0, noise_level * 255, img_array.shape)
+        noisy_array = np.clip(img_array + noise, 0, 255).astype(np.uint8)
+        
+        # Конвертируем обратно в PIL Image
+        noisy_image = Image.fromarray(noisy_array)
+        
+        logger.info(f"✅ Шум добавлен успешно")
+        return noisy_image
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка добавления шума: {e}")
+        return image
+
 def get_channel_id():
     """Получает правильный ID канала"""
     try:
@@ -407,33 +433,48 @@ def get_category_id(post_type, category_slug):
 def set_post_categories(post_id, post_type, category_ids):
     """Установка категорий для поста"""
     try:
-        taxonomy = TAXONOMY_MAP.get(post_type, "category")
+        # Используем стандартную таксономию 'category' для всех постов
+        # Это ключевое исправление!
+        taxonomy = "category"  # Используем стандартную таксономию
+        
         logger.info(f"📂 Устанавливаю рубрики для поста {post_id}")
         logger.info(f"   Таксономия: {taxonomy}")
         logger.info(f"   ID рубрик: {category_ids}")
         
-        success_count = 0
-        for cat_id in category_ids:
-            try:
-                term_url = f"{WP_URL}/wp-json/wp/v2/{taxonomy}/{cat_id}"
-                term_data = {'post': post_id}
-                
-                term_response = wp_session.post(
-                    term_url,
-                    auth=(WP_USERNAME, WP_PASSWORD),
-                    json=term_data,
-                    timeout=30
-                )
-                
-                if term_response.status_code in [200, 201]:
-                    logger.info(f"✅ Рубрика {cat_id} успешно добавлена")
-                    success_count += 1
-                else:
-                    logger.warning(f"⚠️ Ошибка добавления рубрики {cat_id}: {term_response.status_code}")
-            except Exception as e:
-                logger.error(f"❌ Ошибка добавления рубрики {cat_id}: {e}")
+        # Устанавливаем рубрики через стандартный эндпоинт
+        post_url = f"{WP_API_URL}/{post_type}/{post_id}"
         
-        return success_count > 0
+        # Получаем текущий пост
+        get_response = wp_session.get(
+            post_url,
+            auth=(WP_USERNAME, WP_PASSWORD),
+            timeout=30
+        )
+        
+        if get_response.status_code == 200:
+            post_data = get_response.json()
+            
+            # Обновляем категории
+            post_data['categories'] = category_ids
+            
+            # Отправляем обновление
+            update_response = wp_session.post(
+                post_url,
+                auth=(WP_USERNAME, WP_PASSWORD),
+                json=post_data,
+                timeout=30
+            )
+            
+            if update_response.status_code in [200, 201]:
+                logger.info(f"✅ Рубрики {category_ids} успешно установлены")
+                return True
+            else:
+                logger.warning(f"⚠️ Ошибка обновления рубрик: {update_response.status_code}")
+                logger.warning(f"Ответ: {update_response.text[:200]}")
+                return False
+        else:
+            logger.warning(f"⚠️ Не удалось получить пост {post_id}: {get_response.status_code}")
+            return False
             
     except Exception as e:
         logger.error(f"❌ Ошибка установки рубрик: {e}")
@@ -486,12 +527,16 @@ def generate_seo_description(title, content, post_type=None):
         return f"{title[:140]}..."
 
 def unique_image(image_bytes, is_video_thumbnail=False):
-    """Уникализация изображения"""
+    """Уникализация изображения с добавлением шума"""
     try:
         image = Image.open(io.BytesIO(image_bytes))
         
         if image.mode in ('RGBA', 'LA', 'P'):
             image = image.convert('RGB')
+        
+        # Всегда добавляем шум 10%
+        logger.info("📸 Добавляем 10% шума к изображению")
+        image = add_noise_to_image(image, noise_level=0.1)
         
         method = random.choice([
             'resize_sharpen',
@@ -613,7 +658,7 @@ def download_and_upload_photo(file_id, is_video=False, is_thumbnail=False, title
         if not is_video:
             is_video_thumbnail = is_thumbnail
             media_content = unique_image(media_content, is_video_thumbnail)
-            logger.info(f"✅ Фото уникализировано, новый размер: {len(media_content)} байт")
+            logger.info(f"✅ Фото уникализировано с шумом, новый размер: {len(media_content)} байт")
         
         ext = 'mp4' if is_video else 'jpg'
         mime = 'video/mp4' if is_video else 'image/jpeg'
@@ -715,12 +760,12 @@ def process_text_with_deepseek(text, prompt_type='full'):
     try:
         if prompt_type == 'telegram':
             prompt = TELEGRAM_SHORT_PROMPT
-            system_prompt = "Ты редактор новостного канала в Telegram. Напиши краткую версию новости ровно 400 символов. Ответь только готовым текстом."
-            max_tokens = 600
+            system_prompt = "Ты редактор новостного канала в Telegram. Напиши краткую версию новости ровно 500 символов. Ответь только готовым текстом."
+            max_tokens = 700
         elif prompt_type == 'telegram_rewrite':
             prompt = TELEGRAM_REWRITE_PROMPT
-            system_prompt = "Ты редактор новостного канала в Telegram. Перепиши текст по-другому, ровно 400 символов. Ответь только готовым текстом."
-            max_tokens = 600
+            system_prompt = "Ты редактор новостного канала в Telegram. Перепиши текст по-другому, ровно 500 символов. Ответь только готовым текстом."
+            max_tokens = 700
         else:
             prompt = DEEPSEEK_PROMPT
             system_prompt = "Ты редактор новостного сайта. Отвечай только готовым новостным текстом, без пояснений и вступлений."
@@ -747,11 +792,11 @@ def process_text_with_deepseek(text, prompt_type='full'):
             result = re.sub(r'^#+\s+', '', result, flags=re.MULTILINE)
             result = result.strip()
             
-            # Для Telegram проверяем длину
+            # Для Telegram проверяем длину (500 символов)
             if prompt_type in ['telegram', 'telegram_rewrite']:
-                if len(result) > 420:
-                    logger.info(f"📏 Текст {len(result)} символов, прошу ИИ сократить до 400")
-                    retry_prompt = f"""Сократи следующий текст ровно до 400 символов. Сохрани все главные факты и суть. Текст должен быть законченным и логичным.
+                if len(result) > 520:
+                    logger.info(f"📏 Текст {len(result)} символов, прошу ИИ сократить до 500")
+                    retry_prompt = f"""Сократи следующий текст ровно до 500 символов. Сохрани все главные факты и суть. Текст должен быть законченным и логичным.
 
 Текст для сокращения:
 {result}"""
@@ -761,11 +806,11 @@ def process_text_with_deepseek(text, prompt_type='full'):
                         json={
                             "model": "deepseek-chat",
                             "messages": [
-                                {"role": "system", "content": "Ты редактор. Сократи текст ровно до 400 символов. Ответь только готовым текстом."},
+                                {"role": "system", "content": "Ты редактор. Сократи текст ровно до 500 символов. Ответь только готовым текстом."},
                                 {"role": "user", "content": retry_prompt}
                             ],
                             "temperature": 0.5,
-                            "max_tokens": 500
+                            "max_tokens": 600
                         },
                         timeout=60
                     )
@@ -774,19 +819,19 @@ def process_text_with_deepseek(text, prompt_type='full'):
                         result = re.sub(r'^#+\s+', '', result, flags=re.MULTILINE)
                         result = result.strip()
                 
-                if len(result) > 400:
-                    cut_pos = result[:400].rfind('.')
-                    if cut_pos > 350:
+                if len(result) > 500:
+                    cut_pos = result[:500].rfind('.')
+                    if cut_pos > 450:
                         result = result[:cut_pos + 1]
                     else:
-                        cut_pos = result[:400].rfind(' ')
-                        if cut_pos > 350:
+                        cut_pos = result[:500].rfind(' ')
+                        if cut_pos > 450:
                             result = result[:cut_pos]
                         else:
-                            result = result[:400]
-                elif len(result) < 380:
-                    logger.info(f"📏 Текст {len(result)} символов, прошу ИИ дополнить до 400")
-                    retry_prompt = f"""Дополни следующий текст до 400 символов, сохранив стиль и смысл. Добавь важные детали.
+                            result = result[:500]
+                elif len(result) < 480:
+                    logger.info(f"📏 Текст {len(result)} символов, прошу ИИ дополнить до 500")
+                    retry_prompt = f"""Дополни следующий текст до 500 символов, сохранив стиль и смысл. Добавь важные детали.
 
 Текст для дополнения:
 {result}"""
@@ -796,11 +841,11 @@ def process_text_with_deepseek(text, prompt_type='full'):
                         json={
                             "model": "deepseek-chat",
                             "messages": [
-                                {"role": "system", "content": "Ты редактор. Дополни текст до 400 символов. Ответь только готовым текстом."},
+                                {"role": "system", "content": "Ты редактор. Дополни текст до 500 символов. Ответь только готовым текстом."},
                                 {"role": "user", "content": retry_prompt}
                             ],
                             "temperature": 0.5,
-                            "max_tokens": 500
+                            "max_tokens": 600
                         },
                         timeout=60
                     )
@@ -808,8 +853,8 @@ def process_text_with_deepseek(text, prompt_type='full'):
                         result = retry_response.json()["choices"][0]["message"]["content"].strip()
                         result = re.sub(r'^#+\s+', '', result, flags=re.MULTILINE)
                         result = result.strip()
-                        if len(result) > 400:
-                            result = result[:400]
+                        if len(result) > 500:
+                            result = result[:500]
             
             return result
         return None
@@ -855,6 +900,13 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
         post_data['featured_media'] = media_id
         logger.info(f"📎 Устанавливаю обложку WP ID={media_id}")
     
+    # Добавляем категорию, если указана
+    if category_slug:
+        category_id = get_category_id(post_type, category_slug)
+        if category_id:
+            post_data['categories'] = [category_id]
+            logger.info(f"📂 Добавляю категорию ID={category_id}")
+    
     try:
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -865,6 +917,7 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
         logger.info(f"📤 Отправка в WordPress: раздел={post_type}, статус={status}")
         logger.info(f"🔍 SEO Заголовок: {seo_title}")
         logger.info(f"🔍 SEO Описание: {seo_description[:100]}...")
+        logger.info(f"📂 Категория: {category_slug}")
         
         response = wp_session.post(
             f"{WP_API_URL}/{post_type}",
@@ -879,12 +932,23 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
             post_link = response.json()['link']
             logger.info(f"✅ Пост создан: {post_link} (ID: {post_id})")
             
-            if category_slug:
-                category_id = get_category_id(post_type, category_slug)
-                if category_id:
-                    set_post_categories(post_id, post_type, [category_id])
-                else:
-                    logger.warning(f"⚠️ Рубрика {category_slug} не найдена")
+            # Дополнительная проверка установки категории
+            if category_slug and category_id:
+                # Проверяем, установилась ли категория
+                check_response = wp_session.get(
+                    f"{WP_API_URL}/{post_type}/{post_id}",
+                    auth=(WP_USERNAME, WP_PASSWORD),
+                    timeout=30
+                )
+                if check_response.status_code == 200:
+                    post_check = check_response.json()
+                    categories = post_check.get('categories', [])
+                    if category_id in categories:
+                        logger.info(f"✅ Категория успешно установлена!")
+                    else:
+                        logger.warning(f"⚠️ Категория не установлена. Текущие категории: {categories}")
+                        # Пробуем установить повторно
+                        set_post_categories(post_id, post_type, [category_id])
             
             logger.info(f"✅ SEO данные добавлены в Yoast")
             return True, post_link, post_id
@@ -936,19 +1000,19 @@ def clean_html_for_telegram(text):
 
 def shorten_text_for_telegram(text, rewrite=False):
     """
-    Создает краткую версию текста для Telegram через ИИ (ровно 400 символов)
+    Создает краткую версию текста для Telegram через ИИ (ровно 500 символов)
     Если rewrite=True - переписывает текст по-другому
     """
     try:
         clean_text = clean_html_for_telegram(text)
         
-        if len(clean_text) == 400 and not rewrite:
-            logger.info(f"✅ Текст уже ровно 400 символов")
+        if len(clean_text) == 500 and not rewrite:
+            logger.info(f"✅ Текст уже ровно 500 символов")
             return clean_text
         
-        if len(clean_text) < 400 and not rewrite:
-            logger.info(f"📏 Текст {len(clean_text)} символов, дополняю до 400")
-            retry_prompt = f"""Дополни следующий текст до 400 символов, сохранив стиль и смысл. Добавь важные детали, если их не хватает. Текст должен быть связным и логичным.
+        if len(clean_text) < 500 and not rewrite:
+            logger.info(f"📏 Текст {len(clean_text)} символов, дополняю до 500")
+            retry_prompt = f"""Дополни следующий текст до 500 символов, сохранив стиль и смысл. Добавь важные детали, если их не хватает. Текст должен быть связным и логичным.
 
 Текст для дополнения (сейчас {len(clean_text)} символов):
 {clean_text}"""
@@ -961,11 +1025,11 @@ def shorten_text_for_telegram(text, rewrite=False):
                         json={
                             "model": "deepseek-chat",
                             "messages": [
-                                {"role": "system", "content": "Ты редактор. Дополни текст до 400 символов. Ответь только готовым текстом без пояснений."},
+                                {"role": "system", "content": "Ты редактор. Дополни текст до 500 символов. Ответь только готовым текстом без пояснений."},
                                 {"role": "user", "content": retry_prompt}
                             ],
                             "temperature": 0.5,
-                            "max_tokens": 500
+                            "max_tokens": 600
                         },
                         timeout=60
                     )
@@ -974,18 +1038,18 @@ def shorten_text_for_telegram(text, rewrite=False):
                         result = re.sub(r'^#+\s+', '', result, flags=re.MULTILINE)
                         result = result.strip()
                         
-                        if len(result) >= 380:
-                            if len(result) > 400:
-                                result = result[:400]
+                        if len(result) >= 480:
+                            if len(result) > 500:
+                                result = result[:500]
                             logger.info(f"✅ Текст дополнен до {len(result)} символов (попытка {attempt+1})")
                             return result
                     time.sleep(1)
                 except Exception as e:
                     logger.error(f"Ошибка при дополнении текста: {e}")
             
-            if len(clean_text) < 400:
+            if len(clean_text) < 500:
                 logger.warning("⚠️ Не удалось дополнить текст через ИИ, дополняю вручную")
-                return clean_text + " " * (400 - len(clean_text))
+                return clean_text + " " * (500 - len(clean_text))
         
         logger.info(f"🤖 Создаю {'новую' if rewrite else 'краткую'} версию текста для Telegram (сейчас {len(clean_text)} символов)")
         
@@ -997,15 +1061,15 @@ def shorten_text_for_telegram(text, rewrite=False):
             return result
         
         logger.warning("⚠️ Не удалось создать текст через ИИ, обрезаю вручную")
-        if len(clean_text) > 400:
-            return clean_text[:400]
+        if len(clean_text) > 500:
+            return clean_text[:500]
         return clean_text
             
     except Exception as e:
         logger.error(f"❌ Ошибка обработки текста: {e}")
         clean_text = clean_html_for_telegram(text)
-        if len(clean_text) > 400:
-            return clean_text[:400]
+        if len(clean_text) > 500:
+            return clean_text[:500]
         return clean_text
 
 def send_text_only_to_telegram(text):
@@ -1032,7 +1096,7 @@ def send_text_only_to_telegram(text):
         return False
 
 def publish_to_telegram_channel(title, content, post_link, media_file_id=None, video_file_id=None, gallery_file_ids=None):
-    """Публикует пост в Telegram канал с сокращением текста до 400 символов и смайликом"""
+    """Публикует пост в Telegram канал с сокращением текста до 500 символов и смайликом"""
     try:
         logger.info(f"📢 Начинаю публикацию в Telegram канал...")
         
@@ -1047,7 +1111,9 @@ def publish_to_telegram_channel(title, content, post_link, media_file_id=None, v
         logger.info(f"🎯 Выбран смайлик: {emoji}")
         
         shortened_content = shorten_text_for_telegram(content)
-        telegram_text = f"{emoji} <b>{title}</b>\n\n{shortened_content}\n\nПодробнее: {post_link}"
+        
+        # Формируем текст с ссылкой в конце
+        telegram_text = f"{emoji} <b>{title}</b>\n\n{shortened_content}\n\n📖 Читать статью полностью на нашем сайте: {post_link}"
         
         if video_file_id:
             logger.info(f"🎬 Отправляю видео в Telegram канал")
@@ -1119,7 +1185,7 @@ def publish_to_telegram_channel(title, content, post_link, media_file_id=None, v
         try:
             emoji = get_emoji_for_text(title + " " + content)
             shortened_content = shorten_text_for_telegram(content)
-            telegram_text = f"{emoji} <b>{title}</b>\n\n{shortened_content}\n\nПодробнее: {post_link}"
+            telegram_text = f"{emoji} <b>{title}</b>\n\n{shortened_content}\n\n📖 Читать статью полностью на нашем сайте: {post_link}"
             return send_text_only_to_telegram(telegram_text)
         except:
             return False
@@ -1139,9 +1205,9 @@ def preview_telegram_post(title, content, post_link, chat_id, post_key, media_fi
         preview_text = f"<b>📢 ПРЕДПРОСМОТР ПУБЛИКАЦИИ В КАНАЛ</b>\n\n"
         preview_text += f"<b>Смайлик:</b> {emoji}\n"
         preview_text += f"<b>Заголовок:</b>\n{title}\n\n"
-        preview_text += f"<b>Текст (400 символов):</b>\n{shortened_content}\n\n"
-        preview_text += f"<b>Медиа:</b> {media_type}\n"
+        preview_text += f"<b>Текст (500 символов):</b>\n{shortened_content}\n\n"
         preview_text += f"<b>Ссылка:</b>\n{post_link}\n\n"
+        preview_text += f"<b>Медиа:</b> {media_type}\n\n"
         preview_text += f"<i>⬇️ Выберите действие:</i>"
         
         telegram_preview[post_key] = {
@@ -1271,9 +1337,9 @@ def rewrite_telegram_text(post_key, chat_id, message_id):
             preview_text = f"<b>📢 ПРЕДПРОСМОТР ПУБЛИКАЦИИ В КАНАЛ (НОВАЯ ВЕРСИЯ)</b>\n\n"
             preview_text += f"<b>Смайлик:</b> {emoji}\n"
             preview_text += f"<b>Заголовок:</b>\n{title}\n\n"
-            preview_text += f"<b>Новый текст (400 символов):</b>\n{new_content}\n\n"
-            preview_text += f"<b>Медиа:</b> {media_type}\n"
+            preview_text += f"<b>Новый текст (500 символов):</b>\n{new_content}\n\n"
             preview_text += f"<b>Ссылка:</b>\n{post_data['post_link']}\n\n"
+            preview_text += f"<b>Медиа:</b> {media_type}\n\n"
             preview_text += f"<i>⬇️ Выберите действие:</i>"
             
             keyboard = {
