@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from PIL import Image, ImageEnhance, ImageFilter
 import io
 import random
+import numpy as np
 
 load_dotenv()
 
@@ -102,6 +103,16 @@ CATEGORIES = {
     }
 }
 
+# Маппинг таксономий для каждого раздела
+TAXONOMY_MAP = {
+    "news": "news_category",
+    "sport": "sport_category",
+    "realt": "realt_category",
+    "auto": "auto_category",
+    "afisha": "afisha_category",
+    "sales": "sales_category"
+}
+
 app = Flask(__name__)
 wp_session = requests.Session()
 
@@ -117,7 +128,8 @@ telegram_preview = {}
 # Базовый URL для Telegram API
 TG_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
-DEEPSEEK_PROMPT = """Ты редактор новостного сайта. Перепиши новость в строгом городском формате, объемом около 650 символов. Убери лишнюю воду, сделай интересный заголовок, никаких смайликов. Не используй символы # и ** в ответе. Сохрани главные факты. Расставь абзацы.
+# ОБНОВЛЕННЫЙ ПРОМПТ: заголовок не более 150-200 символов
+DEEPSEEK_PROMPT = """Ты редактор новостного сайта. Перепиши новость в строгом городском формате, объемом около 650 символов. Убери лишнюю воду, сделай интересный заголовок (НЕ БОЛЕЕ 150-200 СИМВОЛОВ), никаких смайликов. Не используй символы # и ** в ответе. Сохрани главные факты. Расставь абзацы.
 
 ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст."""
 
@@ -278,8 +290,9 @@ def extract_title_and_content(text):
         return "Новый пост из Telegram", ""
     lines = text.strip().split('\n')
     title = lines[0].strip() if lines else "Новый пост"
-    if len(title) > 180:
-        title = title[:177] + "..."
+    # Ограничиваем заголовок 200 символами
+    if len(title) > 200:
+        title = title[:197] + "..."
     content = '\n'.join(lines[1:]).strip() if len(lines) > 1 else ""
     return title, content
 
@@ -317,46 +330,39 @@ def get_category_id(post_type, category_slug):
         logger.warning(f"⚠️ Рубрика {category_slug} не найдена в словаре")
     return None
 
-def set_post_categories(post_id, category_ids):
-    """Установка категорий для поста через стандартную таксономию WordPress"""
+def set_post_categories(post_id, post_type, category_ids):
+    """Установка категорий для поста через правильную таксономию"""
     try:
+        taxonomy = TAXONOMY_MAP.get(post_type, "category")
         logger.info(f"📂 Устанавливаю рубрики для поста {post_id}")
+        logger.info(f"   Таксономия: {taxonomy}")
         logger.info(f"   ID рубрик: {category_ids}")
         
-        # Используем стандартный эндпоинт для обновления поста
-        post_url = f"{WP_API_URL}/posts/{post_id}"
+        success_count = 0
+        for cat_id in category_ids:
+            try:
+                # Используем правильный эндпоинт для терминов таксономии
+                term_url = f"{WP_URL}/wp-json/wp/v2/{taxonomy}/{cat_id}"
+                term_data = {'post': post_id}
+                
+                logger.info(f"📤 Отправка запроса к {term_url}")
+                term_response = wp_session.post(
+                    term_url,
+                    auth=(WP_USERNAME, WP_PASSWORD),
+                    json=term_data,
+                    timeout=30
+                )
+                
+                if term_response.status_code in [200, 201]:
+                    logger.info(f"✅ Рубрика {cat_id} успешно добавлена")
+                    success_count += 1
+                else:
+                    logger.warning(f"⚠️ Ошибка добавления рубрики {cat_id}: {term_response.status_code}")
+                    logger.warning(f"Ответ: {term_response.text[:200]}")
+            except Exception as e:
+                logger.error(f"❌ Ошибка добавления рубрики {cat_id}: {e}")
         
-        # Получаем текущий пост
-        get_response = wp_session.get(
-            post_url,
-            auth=(WP_USERNAME, WP_PASSWORD),
-            timeout=30
-        )
-        
-        if get_response.status_code == 200:
-            post_data = get_response.json()
-            
-            # Обновляем категории
-            post_data['categories'] = category_ids
-            
-            # Отправляем обновление
-            update_response = wp_session.post(
-                post_url,
-                auth=(WP_USERNAME, WP_PASSWORD),
-                json=post_data,
-                timeout=30
-            )
-            
-            if update_response.status_code in [200, 201]:
-                logger.info(f"✅ Рубрики {category_ids} успешно установлены")
-                return True
-            else:
-                logger.warning(f"⚠️ Ошибка обновления рубрик: {update_response.status_code}")
-                logger.warning(f"Ответ: {update_response.text[:200]}")
-                return False
-        else:
-            logger.warning(f"⚠️ Не удалось получить пост {post_id}: {get_response.status_code}")
-            return False
+        return success_count > 0
             
     except Exception as e:
         logger.error(f"❌ Ошибка установки рубрик: {e}")
@@ -409,18 +415,17 @@ def generate_seo_description(title, content, post_type=None):
         return f"{title[:140]}..."
 
 def unique_image(image_bytes, is_video_thumbnail=False):
-    """Уникализация изображения с добавлением шума"""
+    """Уникализация изображения с добавлением шума 20%"""
     try:
         image = Image.open(io.BytesIO(image_bytes))
         
         if image.mode in ('RGBA', 'LA', 'P'):
             image = image.convert('RGB')
         
-        # Добавляем шум 10%
-        logger.info("📸 Добавляем 10% шума к изображению")
-        import numpy as np
+        # Добавляем шум 20%
+        logger.info("📸 Добавляем 20% шума к изображению")
         img_array = np.array(image)
-        noise = np.random.normal(0, 0.1 * 255, img_array.shape)
+        noise = np.random.normal(0, 0.2 * 255, img_array.shape)  # 20% шума
         noisy_array = np.clip(img_array + noise, 0, 255).astype(np.uint8)
         image = Image.fromarray(noisy_array)
         
@@ -494,7 +499,7 @@ def unique_image(image_bytes, is_video_thumbnail=False):
         buffer.seek(0)
         unique_bytes = buffer.getvalue()
         
-        logger.info(f"✅ Фото уникализировано: {len(unique_bytes)} байт")
+        logger.info(f"✅ Фото уникализировано с шумом 20%: {len(unique_bytes)} байт")
         return unique_bytes
         
     except Exception as e:
@@ -544,7 +549,7 @@ def download_and_upload_photo(file_id, is_video=False, is_thumbnail=False, title
         if not is_video:
             is_video_thumbnail = is_thumbnail
             media_content = unique_image(media_content, is_video_thumbnail)
-            logger.info(f"✅ Фото уникализировано с шумом, новый размер: {len(media_content)} байт")
+            logger.info(f"✅ Фото уникализировано с шумом 20%, новый размер: {len(media_content)} байт")
         
         ext = 'mp4' if is_video else 'jpg'
         mime = 'video/mp4' if is_video else 'image/jpeg'
@@ -654,7 +659,7 @@ def process_text_with_deepseek(text, prompt_type='full'):
             max_tokens = 700
         else:
             prompt = DEEPSEEK_PROMPT
-            system_prompt = "Ты редактор новостного сайта. Отвечай только готовым новостным текстом, без пояснений и вступлений."
+            system_prompt = "Ты редактор новостного сайта. Отвечай только готовым новостным текстом, без пояснений и вступлений. Заголовок должен быть не более 150-200 символов."
             max_tokens = 1000
         
         response = requests.post(
@@ -677,6 +682,16 @@ def process_text_with_deepseek(text, prompt_type='full'):
             result = re.sub(r'^Вот.*?текст.*?:', '', result, flags=re.IGNORECASE)
             result = re.sub(r'^#+\s+', '', result, flags=re.MULTILINE)
             result = result.strip()
+            
+            # Для сайта проверяем длину заголовка
+            if prompt_type == 'full':
+                lines = result.split('\n')
+                if lines:
+                    title = lines[0].strip()
+                    if len(title) > 200:
+                        logger.info(f"📏 Заголовок {len(title)} символов, сокращаю до 200")
+                        title = title[:197] + "..."
+                        result = title + '\n' + '\n'.join(lines[1:])
             
             # Для Telegram проверяем длину
             if prompt_type in ['telegram', 'telegram_rewrite']:
@@ -778,14 +793,18 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
         }
     }
     
-    # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Добавляем категорию в post_data ДО отправки
+    # Получаем ID категории и добавляем в post_data
+    category_id = None
     if category_slug:
         category_id = get_category_id(post_type, category_slug)
         if category_id:
-            post_data['categories'] = [category_id]
-            logger.info(f"📂 Добавляю категорию ID={category_id} в post_data")
+            # Важно: для произвольных таксономий нужно использовать поле с именем таксономии
+            taxonomy = TAXONOMY_MAP.get(post_type, "category")
+            # Используем поле с именем таксономии (например, 'news_category' для новостей)
+            post_data[taxonomy] = [category_id]
+            logger.info(f"📂 Добавляю рубрику ID={category_id} в поле {taxonomy}")
         else:
-            logger.warning(f"⚠️ Рубрика {category_slug} не найдена, категория не будет добавлена")
+            logger.warning(f"⚠️ Рубрика {category_slug} не найдена")
     
     if schedule_time:
         post_data['date'] = schedule_time.isoformat()
@@ -803,7 +822,8 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
         }
         
         logger.info(f"📤 Отправка в WordPress: раздел={post_type}, статус={status}")
-        logger.info(f"📂 Категория: {category_slug} (ID: {post_data.get('categories', 'Нет')})")
+        logger.info(f"📂 Категория: {category_slug} (ID: {category_id})")
+        logger.info(f"📂 Таксономия: {TAXONOMY_MAP.get(post_type, 'category')}")
         logger.info(f"🔍 SEO Заголовок: {seo_title}")
         logger.info(f"🔍 SEO Описание: {seo_description[:100]}...")
         
@@ -822,6 +842,7 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
             
             # Проверяем, что категория установлена
             if category_slug and category_id:
+                taxonomy = TAXONOMY_MAP.get(post_type, "category")
                 check_response = wp_session.get(
                     f"{WP_API_URL}/{post_type}/{post_id}",
                     auth=(WP_USERNAME, WP_PASSWORD),
@@ -829,14 +850,14 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
                 )
                 if check_response.status_code == 200:
                     post_check = check_response.json()
-                    categories = post_check.get('categories', [])
+                    categories = post_check.get(taxonomy, [])
                     if category_id in categories:
-                        logger.info(f"✅ Категория {category_id} успешно установлена!")
+                        logger.info(f"✅ Категория {category_id} успешно установлена в таксономии {taxonomy}!")
                     else:
-                        logger.warning(f"⚠️ Категория не установлена. Текущие категории: {categories}")
+                        logger.warning(f"⚠️ Категория не установлена. Текущие категории в {taxonomy}: {categories}")
                         # Пробуем установить повторно
                         logger.info(f"🔄 Пробую установить категорию повторно...")
-                        set_post_categories(post_id, [category_id])
+                        set_post_categories(post_id, post_type, [category_id])
             
             logger.info(f"✅ SEO данные добавлены в Yoast")
             return True, post_link, post_id
