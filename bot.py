@@ -12,7 +12,6 @@ from datetime import datetime, timedelta
 from PIL import Image, ImageEnhance, ImageFilter
 import io
 import random
-import numpy as np
 
 load_dotenv()
 
@@ -128,11 +127,37 @@ telegram_preview = {}
 # Базовый URL для Telegram API
 TG_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
-# ОБНОВЛЕННЫЙ ПРОМПТ: заголовок не более 150-200 символов
-DEEPSEEK_PROMPT = """Ты редактор новостного сайта. Перепиши новость в строгом городском формате, объемом около 650 символов. Убери лишнюю воду, сделай интересный заголовок (НЕ БОЛЕЕ 150-200 СИМВОЛОВ), никаких смайликов. Не используй символы # и ** в ответе. Сохрани главные факты. Расставь абзацы.
+# НОВАЯ ФУНКЦИЯ: Адаптивный промпт в зависимости от длины текста
+def get_adaptive_prompt(text):
+    """
+    Определяет оптимальную длину статьи в зависимости от исходного текста
+    """
+    text_length = len(text.strip())
+    
+    if text_length <= 300:
+        # Очень короткая новость (до 300 символов) -> 200 символов
+        target_length = 200
+        prompt = f"""Ты редактор новостного сайта. Это очень короткая новость. Перепиши её в строгом городском формате, объемом РОВНО {target_length} символов (не больше и не меньше). Убери лишнюю воду, сделай интересный заголовок (НЕ БОЛЕЕ 150 СИМВОЛОВ), никаких смайликов. Не используй символы # и ** в ответе. Сохрани главные факты.
 
 ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст."""
+    
+    elif text_length <= 1000:
+        # Средняя новость (300-1000 символов) -> 600 символов
+        target_length = 600
+        prompt = f"""Ты редактор новостного сайта. Перепиши новость в строгом городском формате, объемом РОВНО {target_length} символов (не больше и не меньше). Убери лишнюю воду, сделай интересный заголовок (НЕ БОЛЕЕ 150-200 СИМВОЛОВ), никаких смайликов. Не используй символы # и ** в ответе. Сохрани главные факты. Расставь абзацы.
 
+ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст."""
+    
+    else:
+        # Длинная новость (более 1000 символов) -> 800 символов
+        target_length = 800
+        prompt = f"""Ты редактор новостного сайта. Это длинная новость. Сделай из неё качественную статью в строгом городском формате, объемом РОВНО {target_length} символов (не больше и не меньше). Убери лишнюю воду, сделай интересный заголовок (НЕ БОЛЕЕ 150-200 СИМВОЛОВ), никаких смайликов. Не используй символы # и ** в ответе. Сохрани все главные факты. Расставь абзацы.
+
+ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст."""
+    
+    return prompt, target_length
+
+# ОБНОВЛЕННЫЙ ПРОМПТ ДЛЯ TELEGRAM
 TELEGRAM_SHORT_PROMPT = """Напиши краткую версию новости ровно на 500 символов. Сохрани все главные факты и суть. Текст должен быть связным, логичным и заканчиваться законченной мыслью.
 
 Важно:
@@ -341,7 +366,6 @@ def set_post_categories(post_id, post_type, category_ids):
         success_count = 0
         for cat_id in category_ids:
             try:
-                # Используем правильный эндпоинт для терминов таксономии
                 term_url = f"{WP_URL}/wp-json/wp/v2/{taxonomy}/{cat_id}"
                 term_data = {'post': post_id}
                 
@@ -414,6 +438,48 @@ def generate_seo_description(title, content, post_type=None):
         logger.error(f"❌ Ошибка генерации SEO-описания: {e}")
         return f"{title[:140]}..."
 
+def add_noise_to_image(image, noise_level=0.2):
+    """
+    Добавляет шум к изображению используя только PIL
+    noise_level - уровень шума (0.2 = 20%)
+    """
+    try:
+        logger.info(f"📸 Добавляем шум {noise_level*100}% к изображению")
+        
+        # Конвертируем в режим RGB если нужно
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+        
+        # Создаем шумовую маску
+        width, height = image.size
+        noise_mask = Image.new('RGB', (width, height), (0, 0, 0))
+        noise_pixels = noise_mask.load()
+        
+        # Генерируем шум
+        for x in range(width):
+            for y in range(height):
+                noise_value = int(random.uniform(-noise_level * 255, noise_level * 255))
+                noise_pixels[x, y] = (noise_value, noise_value, noise_value)
+        
+        # Применяем шум к оригинальному изображению
+        image_array = image.load()
+        for x in range(width):
+            for y in range(height):
+                r, g, b = image_array[x, y]
+                nr, ng, nb = noise_pixels[x, y]
+                image_array[x, y] = (
+                    max(0, min(255, r + nr)),
+                    max(0, min(255, g + ng)),
+                    max(0, min(255, b + nb))
+                )
+        
+        logger.info(f"✅ Шум {noise_level*100}% добавлен успешно")
+        return image
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка добавления шума: {e}")
+        return image
+
 def unique_image(image_bytes, is_video_thumbnail=False):
     """Уникализация изображения с добавлением шума 20%"""
     try:
@@ -422,12 +488,8 @@ def unique_image(image_bytes, is_video_thumbnail=False):
         if image.mode in ('RGBA', 'LA', 'P'):
             image = image.convert('RGB')
         
-        # Добавляем шум 20%
-        logger.info("📸 Добавляем 20% шума к изображению")
-        img_array = np.array(image)
-        noise = np.random.normal(0, 0.2 * 255, img_array.shape)  # 20% шума
-        noisy_array = np.clip(img_array + noise, 0, 255).astype(np.uint8)
-        image = Image.fromarray(noisy_array)
+        # Добавляем шум 20% используя только PIL
+        image = add_noise_to_image(image, noise_level=0.2)
         
         method = random.choice([
             'resize_sharpen',
@@ -644,19 +706,27 @@ def format_content_for_wp(text, video_url=None, gallery_ids=None, is_video=False
     
     return '\n'.join(formatted)
 
-def process_text_with_deepseek(text, prompt_type='full'):
-    """Обработка текста через DeepSeek"""
+def process_text_with_deepseek(text, prompt_type='full', target_length=None):
+    """Обработка текста через DeepSeek с адаптивной длиной"""
     if not DEEPSEEK_API_KEY:
         return None
     try:
-        if prompt_type == 'telegram':
+        # Для сайта используем адаптивный промпт
+        if prompt_type == 'full':
+            prompt, target_length = get_adaptive_prompt(text)
+            system_prompt = f"Ты редактор новостного сайта. Отвечай только готовым новостным текстом ровно на {target_length} символов, без пояснений и вступлений. Заголовок должен быть не более 150-200 символов."
+            max_tokens = target_length + 200  # Запас для заголовка и форматирования
+        
+        elif prompt_type == 'telegram':
             prompt = TELEGRAM_SHORT_PROMPT
             system_prompt = "Ты редактор новостного канала в Telegram. Напиши краткую версию новости ровно 500 символов. Ответь только готовым текстом."
             max_tokens = 700
+        
         elif prompt_type == 'telegram_rewrite':
             prompt = TELEGRAM_REWRITE_PROMPT
             system_prompt = "Ты редактор новостного канала в Telegram. Перепиши текст по-другому, ровно 500 символов. Ответь только готовым текстом."
             max_tokens = 700
+        
         else:
             prompt = DEEPSEEK_PROMPT
             system_prompt = "Ты редактор новостного сайта. Отвечай только готовым новостным текстом, без пояснений и вступлений. Заголовок должен быть не более 150-200 символов."
@@ -676,6 +746,7 @@ def process_text_with_deepseek(text, prompt_type='full'):
             },
             timeout=60
         )
+        
         if response.status_code == 200:
             result = response.json()["choices"][0]["message"]["content"]
             result = re.sub(r'^Вот обработанный новостной текст.*?:', '', result, flags=re.IGNORECASE)
@@ -683,8 +754,41 @@ def process_text_with_deepseek(text, prompt_type='full'):
             result = re.sub(r'^#+\s+', '', result, flags=re.MULTILINE)
             result = result.strip()
             
-            # Для сайта проверяем длину заголовка
-            if prompt_type == 'full':
+            # Для сайта проверяем длину и корректируем
+            if prompt_type == 'full' and target_length:
+                # Проверяем длину текста без заголовка
+                lines = result.split('\n')
+                if len(lines) > 1:
+                    content_text = '\n'.join(lines[1:]).strip()
+                    content_length = len(content_text)
+                    
+                    # Если длина сильно отличается, просим ИИ скорректировать
+                    if abs(content_length - target_length) > 50:
+                        logger.info(f"📏 Длина контента {content_length} символов, цель {target_length}, корректирую...")
+                        retry_prompt = f"""Исправь этот текст до РОВНО {target_length} символов (сейчас {content_length} символов). Сохрани все главные факты. Заголовок оставь как есть.
+
+Текст для корректировки:
+{result}"""
+                        retry_response = requests.post(
+                            DEEPSEEK_API_URL,
+                            headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"},
+                            json={
+                                "model": "deepseek-chat",
+                                "messages": [
+                                    {"role": "system", "content": f"Ты редактор. Сделай текст ровно {target_length} символов. Ответь только готовым текстом."},
+                                    {"role": "user", "content": retry_prompt}
+                                ],
+                                "temperature": 0.5,
+                                "max_tokens": target_length + 200
+                            },
+                            timeout=60
+                        )
+                        if retry_response.status_code == 200:
+                            result = retry_response.json()["choices"][0]["message"]["content"].strip()
+                            result = re.sub(r'^#+\s+', '', result, flags=re.MULTILINE)
+                            result = result.strip()
+                
+                # Проверяем заголовок
                 lines = result.split('\n')
                 if lines:
                     title = lines[0].strip()
@@ -798,9 +902,7 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
     if category_slug:
         category_id = get_category_id(post_type, category_slug)
         if category_id:
-            # Важно: для произвольных таксономий нужно использовать поле с именем таксономии
             taxonomy = TAXONOMY_MAP.get(post_type, "category")
-            # Используем поле с именем таксономии (например, 'news_category' для новостей)
             post_data[taxonomy] = [category_id]
             logger.info(f"📂 Добавляю рубрику ID={category_id} в поле {taxonomy}")
         else:
@@ -855,7 +957,6 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
                         logger.info(f"✅ Категория {category_id} успешно установлена в таксономии {taxonomy}!")
                     else:
                         logger.warning(f"⚠️ Категория не установлена. Текущие категории в {taxonomy}: {categories}")
-                        # Пробуем установить повторно
                         logger.info(f"🔄 Пробую установить категорию повторно...")
                         set_post_categories(post_id, post_type, [category_id])
             
