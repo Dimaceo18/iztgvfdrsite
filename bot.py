@@ -127,7 +127,38 @@ telegram_preview = {}
 # Базовый URL для Telegram API
 TG_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
-# Адаптивная функция для определения длины статьи
+# ============ ФУНКЦИИ ДЛЯ РАБОТЫ С ЗАГОЛОВКАМИ ============
+
+def clean_title(title):
+    """
+    Очищает и сокращает заголовок до 120 символов с сохранением целостности слов
+    """
+    if not title:
+        return "Новость"
+    
+    # Удаляем лишние пробелы
+    title = ' '.join(title.split())
+    
+    # Удаляем точку в конце
+    if title.endswith('.'):
+        title = title[:-1]
+    
+    # Если заголовок короче 120 символов, возвращаем как есть
+    if len(title) <= 120:
+        return title
+    
+    # Обрезаем до 120 символов с сохранением целых слов
+    cut_pos = title[:120].rfind(' ')
+    if cut_pos > 100:  # Если нашли пробел после 100 символов
+        title = title[:cut_pos] + "..."
+    else:
+        # Если не нашли подходящий пробел, обрезаем по символам
+        title = title[:117] + "..."
+    
+    return title
+
+# ============ АДАПТИВНАЯ ДЛИНА СТАТЬИ ============
+
 def get_adaptive_prompt(text):
     """
     Определяет оптимальную длину статьи в зависимости от исходного текста
@@ -136,19 +167,25 @@ def get_adaptive_prompt(text):
     
     if text_length <= 300:
         target_length = 200
-        prompt = f"""Ты редактор новостного сайта. Это очень короткая новость. Перепиши её в строгом городском формате, объемом РОВНО {target_length} символов (не больше и не меньше). Убери лишнюю воду, сделай интересный заголовок (НЕ БОЛЕЕ 150 СИМВОЛОВ), никаких смайликов. Не используй символы # и ** в ответе. Сохрани главные факты.
+        prompt = f"""Ты редактор новостного сайта. Это очень короткая новость. Перепиши её в строгом городском формате, объемом РОВНО {target_length} символов (не больше и не меньше). 
+        
+Сделай КОРОТКИЙ ИНТЕРЕСНЫЙ ЗАГОЛОВОК (НЕ БОЛЕЕ 100 СИМВОЛОВ). Заголовок должен быть четким и информативным. Никаких смайликов. Не используй символы # и ** в ответе. Сохрани главные факты.
 
 ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст."""
     
     elif text_length <= 1000:
         target_length = 600
-        prompt = f"""Ты редактор новостного сайта. Перепиши новость в строгом городском формате, объемом РОВНО {target_length} символов (не больше и не меньше). Убери лишнюю воду, сделай интересный заголовок (НЕ БОЛЕЕ 150-200 СИМВОЛОВ), никаких смайликов. Не используй символы # и ** в ответе. Сохрани главные факты. Расставь абзацы.
+        prompt = f"""Ты редактор новостного сайта. Перепиши новость в строгом городском формате, объемом РОВНО {target_length} символов (не больше и не меньше). 
+        
+Сделай КОРОТКИЙ ИНТЕРЕСНЫЙ ЗАГОЛОВОК (НЕ БОЛЕЕ 120 СИМВОЛОВ). Заголовок должен быть четким и информативным. Никаких смайликов. Не используй символы # и ** в ответе. Сохрани главные факты. Расставь абзацы.
 
 ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст."""
     
     else:
         target_length = 800
-        prompt = f"""Ты редактор новостного сайта. Это длинная новость. Сделай из неё качественную статью в строгом городском формате, объемом РОВНО {target_length} символов (не больше и не меньше). Убери лишнюю воду, сделай интересный заголовок (НЕ БОЛЕЕ 150-200 СИМВОЛОВ), никаких смайликов. Не используй символы # и ** в ответе. Сохрани все главные факты. Расставь абзацы.
+        prompt = f"""Ты редактор новостного сайта. Это длинная новость. Сделай из неё качественную статью в строгом городском формате, объемом РОВНО {target_length} символов (не больше и не меньше). 
+        
+Сделай КОРОТКИЙ ИНТЕРЕСНЫЙ ЗАГОЛОВОК (НЕ БОЛЕЕ 120 СИМВОЛОВ). Заголовок должен быть четким и информативным. Никаких смайликов. Не используй символы # и ** в ответе. Сохрани все главные факты. Расставь абзацы.
 
 ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст."""
     
@@ -306,13 +343,16 @@ def get_channel_id():
         return CHANNEL_ID
 
 def extract_title_and_content(text):
-    """Извлекает заголовок и контент из текста"""
+    """Извлекает заголовок и контент из текста с улучшенной обрезкой"""
     if not text:
         return "Новый пост из Telegram", ""
+    
     lines = text.strip().split('\n')
     title = lines[0].strip() if lines else "Новый пост"
-    if len(title) > 200:
-        title = title[:197] + "..."
+    
+    # Используем улучшенную функцию очистки заголовка
+    title = clean_title(title)
+    
     content = '\n'.join(lines[1:]).strip() if len(lines) > 1 else ""
     return title, content
 
@@ -612,13 +652,13 @@ def download_and_upload_photo(file_id, is_video=False, is_thumbnail=False, title
         mime = 'video/mp4' if is_video else 'image/jpeg'
         
         if title:
-            clean_title = re.sub(r'[^\w\s-]', '', title)
-            clean_title = re.sub(r'[-\s]+', '-', clean_title)
-            clean_title = clean_title[:100]
-            clean_title = re.sub(r'[^a-zA-Z0-9\-]', '', clean_title)
-            if not clean_title:
-                clean_title = f"media_{int(time.time())}"
-            filename = f"{clean_title}_{int(time.time())}.{ext}"
+            clean_title_for_file = re.sub(r'[^\w\s-]', '', title)
+            clean_title_for_file = re.sub(r'[-\s]+', '-', clean_title_for_file)
+            clean_title_for_file = clean_title_for_file[:100]
+            clean_title_for_file = re.sub(r'[^a-zA-Z0-9\-]', '', clean_title_for_file)
+            if not clean_title_for_file:
+                clean_title_for_file = f"media_{int(time.time())}"
+            filename = f"{clean_title_for_file}_{int(time.time())}.{ext}"
         else:
             filename = f'media_{int(time.time())}.{ext}'
         
@@ -708,7 +748,7 @@ def process_text_with_deepseek(text, prompt_type='full', target_length=None):
     try:
         if prompt_type == 'full':
             prompt, target_length = get_adaptive_prompt(text)
-            system_prompt = f"Ты редактор новостного сайта. Отвечай только готовым новостным текстом ровно на {target_length} символов, без пояснений и вступлений. Заголовок должен быть не более 150-200 символов."
+            system_prompt = f"Ты редактор новостного сайта. Отвечай только готовым новостным текстом ровно на {target_length} символов, без пояснений и вступлений. Заголовок должен быть не более 120 символов."
             max_tokens = target_length + 200
         
         elif prompt_type == 'telegram':
@@ -723,7 +763,7 @@ def process_text_with_deepseek(text, prompt_type='full', target_length=None):
         
         else:
             prompt = DEEPSEEK_PROMPT
-            system_prompt = "Ты редактор новостного сайта. Отвечай только готовым новостным текстом, без пояснений и вступлений."
+            system_prompt = "Ты редактор новостного сайта. Отвечай только готовым новостным текстом, без пояснений и вступлений. Заголовок должен быть не более 120 символов."
             max_tokens = 1000
         
         response = requests.post(
@@ -748,7 +788,25 @@ def process_text_with_deepseek(text, prompt_type='full', target_length=None):
             result = re.sub(r'^#+\s+', '', result, flags=re.MULTILINE)
             result = result.strip()
             
+            # Обработка заголовка для сайта
             if prompt_type == 'full' and target_length:
+                lines = result.split('\n')
+                if lines:
+                    # Очищаем заголовок
+                    title = lines[0].strip()
+                    # Удаляем точки в конце заголовка
+                    if title.endswith('.'):
+                        title = title[:-1]
+                    # Ограничиваем длину
+                    if len(title) > 120:
+                        title = clean_title(title)
+                    # Обновляем результат с новым заголовком
+                    if len(lines) > 1:
+                        result = title + '\n' + '\n'.join(lines[1:])
+                    else:
+                        result = title
+                
+                # Проверяем длину контента
                 lines = result.split('\n')
                 if len(lines) > 1:
                     content_text = '\n'.join(lines[1:]).strip()
@@ -778,15 +836,8 @@ def process_text_with_deepseek(text, prompt_type='full', target_length=None):
                             result = retry_response.json()["choices"][0]["message"]["content"].strip()
                             result = re.sub(r'^#+\s+', '', result, flags=re.MULTILINE)
                             result = result.strip()
-                
-                lines = result.split('\n')
-                if lines:
-                    title = lines[0].strip()
-                    if len(title) > 200:
-                        logger.info(f"📏 Заголовок {len(title)} символов, сокращаю до 200")
-                        title = title[:197] + "..."
-                        result = title + '\n' + '\n'.join(lines[1:])
             
+            # Для Telegram проверяем длину
             if prompt_type in ['telegram', 'telegram_rewrite']:
                 if len(result) > 520:
                     logger.info(f"📏 Текст {len(result)} символов, прошу ИИ сократить до 500")
