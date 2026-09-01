@@ -129,9 +129,9 @@ TG_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 # ============ ФУНКЦИИ ДЛЯ РАБОТЫ С ЗАГОЛОВКАМИ ============
 
-def clean_title(title, original_text=None):
+def clean_title(title):
     """
-    Просит ИИ переделать заголовок до 150-200 символов без обрезания
+    Очищает и сокращает заголовок до 120 символов с сохранением целостности слов
     """
     if not title:
         return "Новость"
@@ -143,119 +143,18 @@ def clean_title(title, original_text=None):
     if title.endswith('.'):
         title = title[:-1]
     
-    # Удаляем кавычки в начале и конце
-    title = title.strip('"\'')
-    
-    # Если заголовок уже в диапазоне 150-200, возвращаем как есть
-    if 150 <= len(title) <= 200:
+    # Если заголовок короче 120 символов, возвращаем как есть
+    if len(title) <= 120:
         return title
     
-    logger.info(f"📏 Заголовок {len(title)} символов, прошу ИИ переделать до 150-200 символов")
-    
-    # Формируем промпт для ИИ
-    if original_text:
-        context = f"\n\nПолный текст новости для контекста:\n{original_text[:500]}..."
+    # Обрезаем до 120 символов с сохранением целых слов
+    cut_pos = title[:120].rfind(' ')
+    if cut_pos > 100:  # Если нашли пробел после 100 символов
+        title = title[:cut_pos] + "..."
     else:
-        context = ""
+        # Если не нашли подходящий пробел, обрезаем по символам
+        title = title[:117] + "..."
     
-    try:
-        if len(title) < 150:
-            prompt = f"""Ты профессиональный редактор новостного портала. 
-Заголовок слишком короткий (сейчас {len(title)} символов).
-Сделай НОВЫЙ заголовок длиной РОВНО 150-200 символов на основе этого заголовка.
-Заголовок должен быть:
-- Информативным и отражать САМУЮ ГЛАВНУЮ мысль
-- Интересным и привлекающим внимание
-- Законченным предложением
-- БЕЗ многоточий, БЕЗ точек в конце, БЕЗ кавычек
-- В новостном стиле
-
-Оригинальный заголовок: {title}{context}
-
-ВАЖНО: Заголовок должен быть РОВНО 150-200 символов. Считай символы!
-Ответь только готовым заголовком, без пояснений."""
-        
-        else:  # len(title) > 200
-            prompt = f"""Ты профессиональный редактор новостного портала. 
-Заголовок слишком длинный (сейчас {len(title)} символов).
-Сделай НОВЫЙ заголовок длиной РОВНО 150-200 символов на основе этого заголовка.
-Заголовок должен быть:
-- Информативным и отражать САМУЮ ГЛАВНУЮ мысль
-- Интересным и привлекающим внимание
-- Законченным предложением
-- БЕЗ многоточий, БЕЗ точек в конце, БЕЗ кавычек
-- В новостном стиле
-
-Оригинальный заголовок: {title}{context}
-
-ВАЖНО: Заголовок должен быть РОВНО 150-200 символов. Считай символы!
-Ответь только готовым заголовком, без пояснений."""
-        
-        response = requests.post(
-            DEEPSEEK_API_URL,
-            headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"},
-            json={
-                "model": "deepseek-chat",
-                "messages": [
-                    {"role": "system", "content": "Ты профессиональный редактор новостного портала. Создай заголовок ровно 150-200 символов. Ответь только готовым заголовком без пояснений. Считай символы в ответе."},
-                    {"role": "user", "content": prompt}
-                ],
-                "temperature": 0.7,
-                "max_tokens": 300
-            },
-            timeout=30
-        )
-        
-        if response.status_code == 200:
-            new_title = response.json()["choices"][0]["message"]["content"].strip()
-            # Удаляем кавычки, если есть
-            new_title = new_title.strip('"\'')
-            # Удаляем точку в конце
-            if new_title.endswith('.'):
-                new_title = new_title[:-1]
-            
-            # Проверяем длину
-            if 150 <= len(new_title) <= 200:
-                logger.info(f"✅ Заголовок переделан до {len(new_title)} символов")
-                return new_title
-            elif len(new_title) < 150:
-                # Если всё ещё короткий, пробуем ещё раз с более строгим промптом
-                logger.warning(f"⚠️ Заголовок {len(new_title)} символов, пробую ещё раз")
-                retry_prompt = f"""Сделай заголовок РОВНО от 150 до 200 символов (сейчас {len(new_title)} символов).
-Используй этот текст как основу: {title}
-Заголовок должен быть законченным предложением. БЕЗ многоточий.
-Ответь только заголовком."""
-                
-                retry_response = requests.post(
-                    DEEPSEEK_API_URL,
-                    headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"},
-                    json={
-                        "model": "deepseek-chat",
-                        "messages": [
-                            {"role": "system", "content": f"Сделай заголовок ровно 150-200 символов. Сейчас {len(new_title)} символов. Ответь только заголовком."},
-                            {"role": "user", "content": retry_prompt}
-                        ],
-                        "temperature": 0.8,
-                        "max_tokens": 300
-                    },
-                    timeout=30
-                )
-                if retry_response.status_code == 200:
-                    final_title = retry_response.json()["choices"][0]["message"]["content"].strip()
-                    final_title = final_title.strip('"\'')
-                    if final_title.endswith('.'):
-                        final_title = final_title[:-1]
-                    if 150 <= len(final_title) <= 200:
-                        logger.info(f"✅ Заголовок исправлен до {len(final_title)} символов")
-                        return final_title
-        else:
-            logger.warning(f"⚠️ Ошибка ИИ: {response.status_code}")
-            
-    except Exception as e:
-        logger.error(f"❌ Ошибка обработки заголовка через ИИ: {e}")
-    
-    # Если ИИ не помог, возвращаем исходный с предупреждением
-    logger.warning(f"⚠️ Не удалось сделать заголовок 150-200 символов, оставляю исходный ({len(title)} символов)")
     return title
 
 # ============ АДАПТИВНАЯ ДЛИНА СТАТЬИ ============
@@ -268,63 +167,27 @@ def get_adaptive_prompt(text):
     
     if text_length <= 300:
         target_length = 200
-        prompt = f"""Ты профессиональный редактор новостного портала. Перепиши эту новость в строгом журналистском стиле, объемом РОВНО {target_length} символов.
+        prompt = f"""Ты редактор новостного сайта. Это очень короткая новость. Перепиши её в строгом городском формате, объемом РОВНО {target_length} символов (не больше и не меньше). 
+        
+Сделай КОРОТКИЙ ИНТЕРЕСНЫЙ ЗАГОЛОВОК (НЕ БОЛЕЕ 100 СИМВОЛОВ). Заголовок должен быть четким и информативным. Никаких смайликов. Не используй символы # и ** в ответе. Сохрани главные факты.
 
-СОЗДАЙ ЗАГОЛОВОК ДЛИНОЙ РОВНО 150-200 СИМВОЛОВ (это ОЧЕНЬ ВАЖНО!).
-Заголовок должен быть:
-- Информативным и отражать САМУЮ ГЛАВНУЮ мысль новости
-- Интересным и привлекающим внимание
-- Законченным предложением
-- БЕЗ многоточий, БЕЗ точек в конце, БЕЗ кавычек
-- В новостном стиле
-
-ВАЖНО: Заголовок должен быть РОВНО 150-200 символов. Считай символы! Если заголовок короче или длиннее - это ошибка.
-
-Никаких смайликов. Не используй символы # и ** в ответе. Сохрани главные факты.
-
-Формат ответа: сначала заголовок (150-200 символов), потом пустая строка, потом текст новости.
-
-НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст."""
+ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст."""
     
     elif text_length <= 1000:
         target_length = 600
-        prompt = f"""Ты профессиональный редактор новостного портала. Перепиши эту новость в строгом журналистском стиле, объемом РОВНО {target_length} символов. Расставь абзацы.
+        prompt = f"""Ты редактор новостного сайта. Перепиши новость в строгом городском формате, объемом РОВНО {target_length} символов (не больше и не меньше). 
+        
+Сделай КОРОТКИЙ ИНТЕРЕСНЫЙ ЗАГОЛОВОК (НЕ БОЛЕЕ 120 СИМВОЛОВ). Заголовок должен быть четким и информативным. Никаких смайликов. Не используй символы # и ** в ответе. Сохрани главные факты. Расставь абзацы.
 
-СОЗДАЙ ЗАГОЛОВОК ДЛИНОЙ РОВНО 150-200 СИМВОЛОВ (это ОЧЕНЬ ВАЖНО!).
-Заголовок должен быть:
-- Информативным и отражать САМУЮ ГЛАВНУЮ мысль новости
-- Интересным и привлекающим внимание
-- Законченным предложением
-- БЕЗ многоточий, БЕЗ точек в конце, БЕЗ кавычек
-- В новостном стиле
-
-ВАЖНО: Заголовок должен быть РОВНО 150-200 символов. Считай символы! Если заголовок короче или длиннее - это ошибка.
-
-Никаких смайликов. Не используй символы # и ** в ответе. Сохрани главные факты.
-
-Формат ответа: сначала заголовок (150-200 символов), потом пустая строка, потом текст новости.
-
-НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст."""
+ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст."""
     
     else:
         target_length = 800
-        prompt = f"""Ты профессиональный редактор новостного портала. Это длинная новость. Сделай из неё качественную статью в строгом журналистском стиле, объемом РОВНО {target_length} символов. Расставь абзацы.
+        prompt = f"""Ты редактор новостного сайта. Это длинная новость. Сделай из неё качественную статью в строгом городском формате, объемом РОВНО {target_length} символов (не больше и не меньше). 
+        
+Сделай КОРОТКИЙ ИНТЕРЕСНЫЙ ЗАГОЛОВОК (НЕ БОЛЕЕ 120 СИМВОЛОВ). Заголовок должен быть четким и информативным. Никаких смайликов. Не используй символы # и ** в ответе. Сохрани все главные факты. Расставь абзацы.
 
-СОЗДАЙ ЗАГОЛОВОК ДЛИНОЙ РОВНО 150-200 СИМВОЛОВ (это ОЧЕНЬ ВАЖНО!).
-Заголовок должен быть:
-- Информативным и отражать САМУЮ ГЛАВНУЮ мысль новости
-- Интересным и привлекающим внимание
-- Законченным предложением
-- БЕЗ многоточий, БЕЗ точек в конце, БЕЗ кавычек
-- В новостном стиле
-
-ВАЖНО: Заголовок должен быть РОВНО 150-200 символов. Считай символы! Если заголовок короче или длиннее - это ошибка.
-
-Никаких смайликов. Не используй символы # и ** в ответе. Сохрани все главные факты.
-
-Формат ответа: сначала заголовок (150-200 символов), потом пустая строка, потом текст новости.
-
-НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст."""
+ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст."""
     
     return prompt, target_length
 
@@ -480,17 +343,15 @@ def get_channel_id():
         return CHANNEL_ID
 
 def extract_title_and_content(text):
-    """Извлекает заголовок и контент из текста"""
+    """Извлекает заголовок и контент из текста с улучшенной обрезкой"""
     if not text:
-        return "Новость", ""
+        return "Новый пост из Telegram", ""
     
     lines = text.strip().split('\n')
-    title = lines[0].strip() if lines else "Новость"
+    title = lines[0].strip() if lines else "Новый пост"
     
-    # Проверяем длину заголовка, но НЕ обрезаем
-    if len(title) < 150 or len(title) > 200:
-        logger.info(f"📏 Заголовок {len(title)} символов, прошу ИИ переделать")
-        title = clean_title(title, text)
+    # Используем улучшенную функцию очистки заголовка
+    title = clean_title(title)
     
     content = '\n'.join(lines[1:]).strip() if len(lines) > 1 else ""
     return title, content
@@ -612,10 +473,10 @@ def generate_seo_description(title, content, post_type=None):
 
 # ============ ФУНКЦИИ ДЛЯ РАБОТЫ С ИЗОБРАЖЕНИЯМИ ============
 
-def add_noise_to_image(image, noise_level=0.1):
+def add_noise_to_image(image, noise_level=0.2):
     """
     Добавляет шум к изображению используя только PIL
-    noise_level - уровень шума (0.1 = 10%)
+    noise_level - уровень шума (0.2 = 20%)
     """
     try:
         logger.info(f"📸 Добавляем шум {noise_level*100}% к изображению")
@@ -655,15 +516,15 @@ def add_noise_to_image(image, noise_level=0.1):
         return image
 
 def unique_image(image_bytes, is_video_thumbnail=False):
-    """Уникализация изображения с добавлением шума 10%"""
+    """Уникализация изображения с добавлением шума 20%"""
     try:
         image = Image.open(io.BytesIO(image_bytes))
         
         if image.mode in ('RGBA', 'LA', 'P'):
             image = image.convert('RGB')
         
-        # Добавляем шум 10%
-        image = add_noise_to_image(image, noise_level=0.1)
+        # Добавляем шум 20%
+        image = add_noise_to_image(image, noise_level=0.2)
         
         method = random.choice([
             'resize_sharpen',
@@ -735,7 +596,7 @@ def unique_image(image_bytes, is_video_thumbnail=False):
         buffer.seek(0)
         unique_bytes = buffer.getvalue()
         
-        logger.info(f"✅ Фото уникализировано с шумом 10%: {len(unique_bytes)} байт")
+        logger.info(f"✅ Фото уникализировано с шумом 20%: {len(unique_bytes)} байт")
         return unique_bytes
         
     except Exception as e:
@@ -785,7 +646,7 @@ def download_and_upload_photo(file_id, is_video=False, is_thumbnail=False, title
         if not is_video:
             is_video_thumbnail = is_thumbnail
             media_content = unique_image(media_content, is_video_thumbnail)
-            logger.info(f"✅ Фото уникализировано с шумом 10%, новый размер: {len(media_content)} байт")
+            logger.info(f"✅ Фото уникализировано с шумом 20%, новый размер: {len(media_content)} байт")
         
         ext = 'mp4' if is_video else 'jpg'
         mime = 'video/mp4' if is_video else 'image/jpeg'
@@ -887,13 +748,7 @@ def process_text_with_deepseek(text, prompt_type='full', target_length=None):
     try:
         if prompt_type == 'full':
             prompt, target_length = get_adaptive_prompt(text)
-            system_prompt = f"""Ты профессиональный редактор новостного портала.
-Создай статью объемом РОВНО {target_length} символов.
-Заголовок должен быть РОВНО 150-200 символов (ЭТО КРИТИЧЕСКИ ВАЖНО!).
-Заголовок должен быть информативным, отражать суть новости и привлекать внимание.
-НЕ используй многоточия, точки в конце, кавычки.
-Ответь только готовым текстом, без пояснений.
-Считай символы в заголовке и тексте!"""
+            system_prompt = f"Ты редактор новостного сайта. Отвечай только готовым новостным текстом ровно на {target_length} символов, без пояснений и вступлений. Заголовок должен быть не более 120 символов."
             max_tokens = target_length + 200
         
         elif prompt_type == 'telegram':
@@ -907,8 +762,8 @@ def process_text_with_deepseek(text, prompt_type='full', target_length=None):
             max_tokens = 700
         
         else:
-            prompt = "Перепиши этот текст в формате новости. Сохрани все факты."
-            system_prompt = "Ты редактор новостного сайта. Отвечай только готовым новостным текстом, без пояснений и вступлений. Заголовок должен быть ровно 150-200 символов."
+            prompt = DEEPSEEK_PROMPT
+            system_prompt = "Ты редактор новостного сайта. Отвечай только готовым новостным текстом, без пояснений и вступлений. Заголовок должен быть не более 120 символов."
             max_tokens = 1000
         
         response = requests.post(
@@ -937,29 +792,19 @@ def process_text_with_deepseek(text, prompt_type='full', target_length=None):
             if prompt_type == 'full' and target_length:
                 lines = result.split('\n')
                 if lines:
+                    # Очищаем заголовок
                     title = lines[0].strip()
-                    # Удаляем точку в конце
+                    # Удаляем точки в конце заголовка
                     if title.endswith('.'):
                         title = title[:-1]
-                    # Удаляем кавычки в начале и конце
-                    title = title.strip('"\'')
-                    
-                    # Проверяем длину заголовка
-                    if len(title) < 150 or len(title) > 200:
-                        logger.info(f"📏 Заголовок {len(title)} символов, прошу ИИ переделать до 150-200")
-                        title = clean_title(title, text)
-                        logger.info(f"✅ Заголовок переделан до {len(title)} символов")
-                    else:
-                        logger.info(f"✅ Заголовок идеальной длины: {len(title)} символов")
-                    
+                    # Ограничиваем длину
+                    if len(title) > 120:
+                        title = clean_title(title)
                     # Обновляем результат с новым заголовком
                     if len(lines) > 1:
                         result = title + '\n' + '\n'.join(lines[1:])
                     else:
                         result = title
-                    
-                    logger.info(f"📝 Итоговый заголовок: {len(title)} символов")
-                    logger.info(f"📝 Текст заголовка: {title[:100]}...")
                 
                 # Проверяем длину контента
                 lines = result.split('\n')
@@ -1200,37 +1045,75 @@ def clean_html_for_telegram(text):
     return text
 
 def shorten_text_for_telegram(text, rewrite=False):
-    """Создает превью для Telegram (без обрезания слов)"""
+    """Создает краткую версию текста для Telegram через ИИ (ровно 500 символов)"""
     try:
         clean_text = clean_html_for_telegram(text)
         
-        # Берем первые 300 символов для анонса, но не обрезаем слова
-        if len(clean_text) > 300:
-            cut_positions = [
-                clean_text[:300].rfind('. '),
-                clean_text[:300].rfind('! '),
-                clean_text[:300].rfind('? '),
-                clean_text[:300].rfind('\n\n'),
-                clean_text[:300].rfind('.'),
-                clean_text[:300].rfind('!'),
-                clean_text[:300].rfind('?')
-            ]
-            cut_pos = max([p for p in cut_positions if p > 200] + [0])
-            
-            if cut_pos > 0:
-                return clean_text[:cut_pos + 1]
-            else:
-                cut_pos = clean_text[:300].rfind(' ')
-                if cut_pos > 250:
-                    return clean_text[:cut_pos]
-                else:
-                    return clean_text[:300]
-        else:
+        if len(clean_text) == 500 and not rewrite:
+            logger.info(f"✅ Текст уже ровно 500 символов")
             return clean_text
+        
+        if len(clean_text) < 500 and not rewrite:
+            logger.info(f"📏 Текст {len(clean_text)} символов, дополняю до 500")
+            retry_prompt = f"""Дополни следующий текст до 500 символов, сохранив стиль и смысл. Добавь важные детали, если их не хватает. Текст должен быть связным и логичным.
+
+Текст для дополнения (сейчас {len(clean_text)} символов):
+{clean_text}"""
+            
+            for attempt in range(3):
+                try:
+                    response = requests.post(
+                        DEEPSEEK_API_URL,
+                        headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"},
+                        json={
+                            "model": "deepseek-chat",
+                            "messages": [
+                                {"role": "system", "content": "Ты редактор. Дополни текст до 500 символов. Ответь только готовым текстом без пояснений."},
+                                {"role": "user", "content": retry_prompt}
+                            ],
+                            "temperature": 0.5,
+                            "max_tokens": 600
+                        },
+                        timeout=60
+                    )
+                    if response.status_code == 200:
+                        result = response.json()["choices"][0]["message"]["content"].strip()
+                        result = re.sub(r'^#+\s+', '', result, flags=re.MULTILINE)
+                        result = result.strip()
+                        
+                        if len(result) >= 480:
+                            if len(result) > 500:
+                                result = result[:500]
+                            logger.info(f"✅ Текст дополнен до {len(result)} символов (попытка {attempt+1})")
+                            return result
+                    time.sleep(1)
+                except Exception as e:
+                    logger.error(f"Ошибка при дополнении текста: {e}")
+            
+            if len(clean_text) < 500:
+                logger.warning("⚠️ Не удалось дополнить текст через ИИ, дополняю вручную")
+                return clean_text + " " * (500 - len(clean_text))
+        
+        logger.info(f"🤖 Создаю {'новую' if rewrite else 'краткую'} версию текста для Telegram (сейчас {len(clean_text)} символов)")
+        
+        prompt_type = 'telegram_rewrite' if rewrite else 'telegram'
+        result = process_text_with_deepseek(clean_text, prompt_type=prompt_type)
+        
+        if result:
+            logger.info(f"✅ {'Переписанный' if rewrite else 'Краткий'} текст: {len(result)} символов")
+            return result
+        
+        logger.warning("⚠️ Не удалось создать текст через ИИ, обрезаю вручную")
+        if len(clean_text) > 500:
+            return clean_text[:500]
+        return clean_text
             
     except Exception as e:
-        logger.error(f"❌ Ошибка создания превью: {e}")
-        return clean_html_for_telegram(text)[:300]
+        logger.error(f"❌ Ошибка обработки текста: {e}")
+        clean_text = clean_html_for_telegram(text)
+        if len(clean_text) > 500:
+            return clean_text[:500]
+        return clean_text
 
 def send_text_only_to_telegram(text):
     """Отправляет только текст в Telegram канал"""
@@ -1255,7 +1138,7 @@ def send_text_only_to_telegram(text):
         return False
 
 def publish_to_telegram_channel(title, content, post_link, media_file_id=None, video_file_id=None, gallery_file_ids=None):
-    """Публикует пост в Telegram канал с превью (без обрезания текста)"""
+    """Публикует пост в Telegram канал с сокращением текста до 500 символов"""
     try:
         logger.info(f"📢 Начинаю публикацию в Telegram канал...")
         
@@ -1269,41 +1152,9 @@ def publish_to_telegram_channel(title, content, post_link, media_file_id=None, v
         emoji = get_emoji_for_text(title + " " + content)
         logger.info(f"🎯 Выбран смайлик: {emoji}")
         
-        # Создаем превью - первые 300 символов как анонс
-        preview_text = clean_html_for_telegram(content)
+        shortened_content = shorten_text_for_telegram(content)
+        telegram_text = f"{emoji} <b>{title}</b>\n\n{shortened_content}\n\n📖 Читать статью полностью на нашем сайте: {post_link}"
         
-        # Берем первые 300 символов для анонса, но не обрезаем слова
-        if len(preview_text) > 300:
-            cut_positions = [
-                preview_text[:300].rfind('. '),
-                preview_text[:300].rfind('! '),
-                preview_text[:300].rfind('? '),
-                preview_text[:300].rfind('\n\n'),
-                preview_text[:300].rfind('.'),
-                preview_text[:300].rfind('!'),
-                preview_text[:300].rfind('?')
-            ]
-            
-            cut_pos = max([p for p in cut_positions if p > 200] + [0])
-            
-            if cut_pos > 0:
-                preview = preview_text[:cut_pos + 1]
-            else:
-                cut_pos = preview_text[:300].rfind(' ')
-                if cut_pos > 250:
-                    preview = preview_text[:cut_pos]
-                else:
-                    preview = preview_text[:300]
-        else:
-            preview = preview_text
-        
-        # Формируем сообщение
-        if preview:
-            telegram_text = f"{emoji} <b>{title}</b>\n\n{preview}\n\n📖 Читать статью полностью на нашем сайте: {post_link}"
-        else:
-            telegram_text = f"{emoji} <b>{title}</b>\n\n📖 Читать статью полностью на нашем сайте: {post_link}"
-        
-        # Проверяем, нужно ли отправлять медиа
         if video_file_id:
             logger.info(f"🎬 Отправляю видео в Telegram канал")
             media_to_send = video_file_id
@@ -1372,32 +1223,8 @@ def publish_to_telegram_channel(title, content, post_link, media_file_id=None, v
         logger.error(f"❌ Ошибка публикации в Telegram канал: {e}")
         try:
             emoji = get_emoji_for_text(title + " " + content)
-            preview_text = clean_html_for_telegram(content)
-            
-            # Создаем превью без обрезания слов
-            if len(preview_text) > 300:
-                cut_positions = [
-                    preview_text[:300].rfind('. '),
-                    preview_text[:300].rfind('! '),
-                    preview_text[:300].rfind('? '),
-                    preview_text[:300].rfind('\n\n'),
-                    preview_text[:300].rfind('.'),
-                    preview_text[:300].rfind('!'),
-                    preview_text[:300].rfind('?')
-                ]
-                cut_pos = max([p for p in cut_positions if p > 200] + [0])
-                if cut_pos > 0:
-                    preview = preview_text[:cut_pos + 1]
-                else:
-                    cut_pos = preview_text[:300].rfind(' ')
-                    if cut_pos > 250:
-                        preview = preview_text[:cut_pos]
-                    else:
-                        preview = preview_text[:300]
-            else:
-                preview = preview_text
-            
-            telegram_text = f"{emoji} <b>{title}</b>\n\n{preview}\n\n📖 Читать статью полностью на нашем сайте: {post_link}"
+            shortened_content = shorten_text_for_telegram(content)
+            telegram_text = f"{emoji} <b>{title}</b>\n\n{shortened_content}\n\n📖 Читать статью полностью на нашем сайте: {post_link}"
             return send_text_only_to_telegram(telegram_text)
         except:
             return False
@@ -1410,47 +1237,21 @@ def preview_telegram_post(title, content, post_link, chat_id, post_key, media_fi
         emoji = get_emoji_for_text(title + " " + content)
         logger.info(f"🎯 Выбран смайлик: {emoji}")
         
-        # Создаем превью без обрезания слов
-        preview_text = clean_html_for_telegram(content)
-        
-        # Берем первые 300 символов для анонса, но не обрезаем слова
-        if len(preview_text) > 300:
-            cut_positions = [
-                preview_text[:300].rfind('. '),
-                preview_text[:300].rfind('! '),
-                preview_text[:300].rfind('? '),
-                preview_text[:300].rfind('\n\n'),
-                preview_text[:300].rfind('.'),
-                preview_text[:300].rfind('!'),
-                preview_text[:300].rfind('?')
-            ]
-            cut_pos = max([p for p in cut_positions if p > 200] + [0])
-            
-            if cut_pos > 0:
-                preview = preview_text[:cut_pos + 1]
-            else:
-                cut_pos = preview_text[:300].rfind(' ')
-                if cut_pos > 250:
-                    preview = preview_text[:cut_pos]
-                else:
-                    preview = preview_text[:300]
-        else:
-            preview = preview_text
+        shortened_content = shorten_text_for_telegram(content)
         
         media_type = "🎬 Видео" if video_file_id else "📸 Фото" if media_file_id else "📝 Текст"
         
-        preview_message = f"<b>📢 ПРЕДПРОСМОТР ПУБЛИКАЦИИ В КАНАЛ</b>\n\n"
-        preview_message += f"<b>Смайлик:</b> {emoji}\n"
-        preview_message += f"<b>Заголовок ({len(title)} символов):</b>\n{title}\n\n"
-        preview_message += f"<b>Превью (анонс):</b>\n{preview}\n\n"
-        preview_message += f"<b>Медиа:</b> {media_type}\n"
-        preview_message += f"<b>Ссылка:</b>\n{post_link}\n\n"
-        preview_message += f"<i>⬇️ Выберите действие:</i>"
+        preview_text = f"<b>📢 ПРЕДПРОСМОТР ПУБЛИКАЦИИ В КАНАЛ</b>\n\n"
+        preview_text += f"<b>Смайлик:</b> {emoji}\n"
+        preview_text += f"<b>Заголовок:</b>\n{title}\n\n"
+        preview_text += f"<b>Текст (500 символов):</b>\n{shortened_content}\n\n"
+        preview_text += f"<b>Медиа:</b> {media_type}\n"
+        preview_text += f"<b>Ссылка:</b>\n{post_link}\n\n"
+        preview_text += f"<i>⬇️ Выберите действие:</i>"
         
         telegram_preview[post_key] = {
             'title': title,
             'content': content,
-            'preview': preview,
             'post_link': post_link,
             'media_file_id': media_file_id,
             'video_file_id': video_file_id,
@@ -1487,7 +1288,7 @@ def preview_telegram_post(title, content, post_link, chat_id, post_key, media_fi
                             files = {'video': media_content}
                             data = {
                                 'chat_id': chat_id,
-                                'caption': preview_message,
+                                'caption': preview_text,
                                 'parse_mode': 'HTML',
                                 'supports_streaming': True,
                                 'reply_markup': json.dumps(keyboard)
@@ -1498,7 +1299,7 @@ def preview_telegram_post(title, content, post_link, chat_id, post_key, media_fi
                             files = {'photo': media_content}
                             data = {
                                 'chat_id': chat_id,
-                                'caption': preview_message,
+                                'caption': preview_text,
                                 'parse_mode': 'HTML',
                                 'reply_markup': json.dumps(keyboard)
                             }
@@ -1509,18 +1310,18 @@ def preview_telegram_post(title, content, post_link, chat_id, post_key, media_fi
                             return True
                         else:
                             logger.error(f"❌ Ошибка отправки предпросмотра с медиа: {response.status_code}")
-                            return send_preview_without_media(chat_id, preview_message, keyboard)
+                            return send_preview_without_media(chat_id, preview_text, keyboard)
                     else:
                         logger.error(f"❌ Ошибка скачивания медиа для предпросмотра: {media_response.status_code}")
-                        return send_preview_without_media(chat_id, preview_message, keyboard)
+                        return send_preview_without_media(chat_id, preview_text, keyboard)
                 else:
                     logger.error("❌ Не получен file_path")
-                    return send_preview_without_media(chat_id, preview_message, keyboard)
+                    return send_preview_without_media(chat_id, preview_text, keyboard)
             else:
                 logger.error(f"❌ Ошибка getFile: {file_response.status_code}")
-                return send_preview_without_media(chat_id, preview_message, keyboard)
+                return send_preview_without_media(chat_id, preview_text, keyboard)
         else:
-            return send_preview_without_media(chat_id, preview_message, keyboard)
+            return send_preview_without_media(chat_id, preview_text, keyboard)
             
     except Exception as e:
         logger.error(f"❌ Ошибка показа предпросмотра: {e}")
@@ -1561,19 +1362,19 @@ def rewrite_telegram_text(post_key, chat_id, message_id):
         
         logger.info(f"🔄 Переписываю текст для Telegram через ИИ...")
         
-        # Создаем новый анонс без обрезания слов
-        new_preview = shorten_text_for_telegram(content, rewrite=True)
+        new_content = shorten_text_for_telegram(content, rewrite=True)
         
-        if new_preview:
-            telegram_preview[post_key]['preview'] = new_preview
+        if new_content:
+            telegram_preview[post_key]['content'] = content
+            telegram_preview[post_key]['rewritten_content'] = new_content
             
             emoji = post_data.get('emoji', get_emoji_for_text(title + " " + content))
             media_type = "🎬 Видео" if post_data.get('video_file_id') else "📸 Фото" if post_data.get('media_file_id') else "📝 Текст"
             
             preview_text = f"<b>📢 ПРЕДПРОСМОТР ПУБЛИКАЦИИ В КАНАЛ (НОВАЯ ВЕРСИЯ)</b>\n\n"
             preview_text += f"<b>Смайлик:</b> {emoji}\n"
-            preview_text += f"<b>Заголовок ({len(title)} символов):</b>\n{title}\n\n"
-            preview_text += f"<b>Новое превью (анонс):</b>\n{new_preview}\n\n"
+            preview_text += f"<b>Заголовок:</b>\n{title}\n\n"
+            preview_text += f"<b>Новый текст (500 символов):</b>\n{new_content}\n\n"
             preview_text += f"<b>Медиа:</b> {media_type}\n"
             preview_text += f"<b>Ссылка:</b>\n{post_data['post_link']}\n\n"
             preview_text += f"<i>⬇️ Выберите действие:</i>"
@@ -1588,7 +1389,7 @@ def rewrite_telegram_text(post_key, chat_id, message_id):
             
             try:
                 tg_edit_message_text(chat_id, message_id, preview_text, json.dumps(keyboard))
-                logger.info(f"✅ Предпросмотр обновлен с новым превью")
+                logger.info(f"✅ Предпросмотр обновлен с новым текстом")
                 return True
             except Exception as e:
                 logger.error(f"❌ Ошибка обновления предпросмотра: {e}")
@@ -1611,7 +1412,7 @@ def confirm_telegram_publish(post_key):
         post_data = telegram_preview[post_key]
         chat_id = post_data.get('chat_id')
         
-        content_to_publish = post_data.get('preview', post_data['content'])
+        content_to_publish = post_data.get('rewritten_content', post_data['content'])
         
         success = publish_to_telegram_channel(
             title=post_data['title'],
