@@ -165,9 +165,10 @@ def get_adaptive_prompt(text):
     """
     text_length = len(text.strip())
     
-    if text_length <= 300:
-        target_length = 200
-        prompt = f"""Ты редактор новостного сайта. Это очень короткая новость. Перепиши её в строгом городском формате, объемом РОВНО {target_length} символов (не больше и не меньше). 
+    # НОВОЕ: Для коротких текстов (до 500 символов) - делаем короткую новость
+    if text_length <= 500:
+        target_length = min(text_length + 50, 500)  # Чуть длиннее оригинала, но не более 500
+        prompt = f"""Ты редактор новостного сайта. Это короткая новость. Перепиши её в строгом городском формате, объемом РОВНО {target_length} символов (не больше и не меньше). 
         
 Сделай КОРОТКИЙ ИНТЕРЕСНЫЙ ЗАГОЛОВОК (НЕ БОЛЕЕ 100 СИМВОЛОВ). Заголовок должен быть четким и информативным. Никаких смайликов. Не используй символы # и ** в ответе. Сохрани главные факты.
 
@@ -473,10 +474,10 @@ def generate_seo_description(title, content, post_type=None):
 
 # ============ ФУНКЦИИ ДЛЯ РАБОТЫ С ИЗОБРАЖЕНИЯМИ ============
 
-def add_noise_to_image(image, noise_level=0.2):
+def add_noise_to_image(image, noise_level=0.15):  # ИЗМЕНЕНО: 0.2 -> 0.15 (15%)
     """
     Добавляет шум к изображению используя только PIL
-    noise_level - уровень шума (0.2 = 20%)
+    noise_level - уровень шума (0.15 = 15%)
     """
     try:
         logger.info(f"📸 Добавляем шум {noise_level*100}% к изображению")
@@ -516,15 +517,15 @@ def add_noise_to_image(image, noise_level=0.2):
         return image
 
 def unique_image(image_bytes, is_video_thumbnail=False):
-    """Уникализация изображения с добавлением шума 20%"""
+    """Уникализация изображения с добавлением шума 15%"""  # ИЗМЕНЕНО: 20% -> 15%
     try:
         image = Image.open(io.BytesIO(image_bytes))
         
         if image.mode in ('RGBA', 'LA', 'P'):
             image = image.convert('RGB')
         
-        # Добавляем шум 20%
-        image = add_noise_to_image(image, noise_level=0.2)
+        # Добавляем шум 15%  # ИЗМЕНЕНО: 20% -> 15%
+        image = add_noise_to_image(image, noise_level=0.15)  # ИЗМЕНЕНО: 0.2 -> 0.15
         
         method = random.choice([
             'resize_sharpen',
@@ -596,7 +597,7 @@ def unique_image(image_bytes, is_video_thumbnail=False):
         buffer.seek(0)
         unique_bytes = buffer.getvalue()
         
-        logger.info(f"✅ Фото уникализировано с шумом 20%: {len(unique_bytes)} байт")
+        logger.info(f"✅ Фото уникализировано с шумом 15%: {len(unique_bytes)} байт")  # ИЗМЕНЕНО: 20% -> 15%
         return unique_bytes
         
     except Exception as e:
@@ -646,7 +647,7 @@ def download_and_upload_photo(file_id, is_video=False, is_thumbnail=False, title
         if not is_video:
             is_video_thumbnail = is_thumbnail
             media_content = unique_image(media_content, is_video_thumbnail)
-            logger.info(f"✅ Фото уникализировано с шумом 20%, новый размер: {len(media_content)} байт")
+            logger.info(f"✅ Фото уникализировано с шумом 15%, новый размер: {len(media_content)} байт")  # ИЗМЕНЕНО: 20% -> 15%
         
         ext = 'mp4' if is_video else 'jpg'
         mime = 'video/mp4' if is_video else 'image/jpeg'
@@ -812,30 +813,59 @@ def process_text_with_deepseek(text, prompt_type='full', target_length=None):
                     content_text = '\n'.join(lines[1:]).strip()
                     content_length = len(content_text)
                     
-                    if abs(content_length - target_length) > 50:
-                        logger.info(f"📏 Длина контента {content_length} символов, цель {target_length}, корректирую...")
-                        retry_prompt = f"""Исправь этот текст до РОВНО {target_length} символов (сейчас {content_length} символов). Сохрани все главные факты. Заголовок оставь как есть.
+                    # Для коротких новостей (до 500 символов) не так строго проверяем длину
+                    if target_length <= 500:
+                        # Допускаем отклонение ±30 символов для коротких новостей
+                        if abs(content_length - target_length) > 30:
+                            logger.info(f"📏 Длина контента {content_length} символов, цель {target_length}, корректирую...")
+                            retry_prompt = f"""Исправь этот текст до РОВНО {target_length} символов (сейчас {content_length} символов). Сохрани все главные факты. Заголовок оставь как есть.
 
 Текст для корректировки:
 {result}"""
-                        retry_response = requests.post(
-                            DEEPSEEK_API_URL,
-                            headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"},
-                            json={
-                                "model": "deepseek-chat",
-                                "messages": [
-                                    {"role": "system", "content": f"Ты редактор. Сделай текст ровно {target_length} символов. Ответь только готовым текстом."},
-                                    {"role": "user", "content": retry_prompt}
-                                ],
-                                "temperature": 0.5,
-                                "max_tokens": target_length + 200
-                            },
-                            timeout=60
-                        )
-                        if retry_response.status_code == 200:
-                            result = retry_response.json()["choices"][0]["message"]["content"].strip()
-                            result = re.sub(r'^#+\s+', '', result, flags=re.MULTILINE)
-                            result = result.strip()
+                            retry_response = requests.post(
+                                DEEPSEEK_API_URL,
+                                headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"},
+                                json={
+                                    "model": "deepseek-chat",
+                                    "messages": [
+                                        {"role": "system", "content": f"Ты редактор. Сделай текст ровно {target_length} символов. Ответь только готовым текстом."},
+                                        {"role": "user", "content": retry_prompt}
+                                    ],
+                                    "temperature": 0.5,
+                                    "max_tokens": target_length + 200
+                                },
+                                timeout=60
+                            )
+                            if retry_response.status_code == 200:
+                                result = retry_response.json()["choices"][0]["message"]["content"].strip()
+                                result = re.sub(r'^#+\s+', '', result, flags=re.MULTILINE)
+                                result = result.strip()
+                    else:
+                        # Для длинных новостей используем старую логику (отклонение 50 символов)
+                        if abs(content_length - target_length) > 50:
+                            logger.info(f"📏 Длина контента {content_length} символов, цель {target_length}, корректирую...")
+                            retry_prompt = f"""Исправь этот текст до РОВНО {target_length} символов (сейчас {content_length} символов). Сохрани все главные факты. Заголовок оставь как есть.
+
+Текст для корректировки:
+{result}"""
+                            retry_response = requests.post(
+                                DEEPSEEK_API_URL,
+                                headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"},
+                                json={
+                                    "model": "deepseek-chat",
+                                    "messages": [
+                                        {"role": "system", "content": f"Ты редактор. Сделай текст ровно {target_length} символов. Ответь только готовым текстом."},
+                                        {"role": "user", "content": retry_prompt}
+                                    ],
+                                    "temperature": 0.5,
+                                    "max_tokens": target_length + 200
+                                },
+                                timeout=60
+                            )
+                            if retry_response.status_code == 200:
+                                result = retry_response.json()["choices"][0]["message"]["content"].strip()
+                                result = re.sub(r'^#+\s+', '', result, flags=re.MULTILINE)
+                                result = result.strip()
             
             # Для Telegram проверяем длину
             if prompt_type in ['telegram', 'telegram_rewrite']:
