@@ -473,10 +473,10 @@ def generate_seo_description(title, content, post_type=None):
 
 # ============ ФУНКЦИИ ДЛЯ РАБОТЫ С ИЗОБРАЖЕНИЯМИ ============
 
-def add_noise_to_image(image, noise_level=0.2):
+def add_noise_to_image(image, noise_level=0.1):
     """
     Добавляет шум к изображению используя только PIL
-    noise_level - уровень шума (0.2 = 20%)
+    noise_level - уровень шума (0.1 = 10%)
     """
     try:
         logger.info(f"📸 Добавляем шум {noise_level*100}% к изображению")
@@ -516,15 +516,15 @@ def add_noise_to_image(image, noise_level=0.2):
         return image
 
 def unique_image(image_bytes, is_video_thumbnail=False):
-    """Уникализация изображения с добавлением шума 20%"""
+    """Уникализация изображения с добавлением шума 10%"""
     try:
         image = Image.open(io.BytesIO(image_bytes))
         
         if image.mode in ('RGBA', 'LA', 'P'):
             image = image.convert('RGB')
         
-        # Добавляем шум 20%
-        image = add_noise_to_image(image, noise_level=0.2)
+        # Добавляем шум 10%
+        image = add_noise_to_image(image, noise_level=0.1)
         
         method = random.choice([
             'resize_sharpen',
@@ -596,7 +596,7 @@ def unique_image(image_bytes, is_video_thumbnail=False):
         buffer.seek(0)
         unique_bytes = buffer.getvalue()
         
-        logger.info(f"✅ Фото уникализировано с шумом 20%: {len(unique_bytes)} байт")
+        logger.info(f"✅ Фото уникализировано с шумом 10%: {len(unique_bytes)} байт")
         return unique_bytes
         
     except Exception as e:
@@ -646,7 +646,7 @@ def download_and_upload_photo(file_id, is_video=False, is_thumbnail=False, title
         if not is_video:
             is_video_thumbnail = is_thumbnail
             media_content = unique_image(media_content, is_video_thumbnail)
-            logger.info(f"✅ Фото уникализировано с шумом 20%, новый размер: {len(media_content)} байт")
+            logger.info(f"✅ Фото уникализировано с шумом 10%, новый размер: {len(media_content)} байт")
         
         ext = 'mp4' if is_video else 'jpg'
         mime = 'video/mp4' if is_video else 'image/jpeg'
