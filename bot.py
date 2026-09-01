@@ -131,7 +131,8 @@ TG_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 def clean_title(title):
     """
-    Очищает и сокращает заголовок до 120 символов с сохранением целостности слов
+    Очищает и сокращает заголовок до 120 символов.
+    Заголовок должен быть ОДНИМ предложением, без многоточия и без двух предложений.
     """
     if not title:
         return "Новость"
@@ -143,19 +144,60 @@ def clean_title(title):
     if title.endswith('.'):
         title = title[:-1]
     
+    # Разбиваем на предложения по точкам, вопросительным и восклицательным знакам
+    # Но сохраняем сокращения (например, "г.", "ул.", "др.")
+    sentences = re.split(r'(?<!\b[а-я]\.)(?<!\b[а-я][а-я]\.)(?<=[.!?])\s+', title)
+    
+    # Если больше одного предложения - берем ПЕРВОЕ (самое важное)
+    if len(sentences) > 1:
+        title = sentences[0].strip()
+        logger.info(f"📌 Заголовок сокращен до первого предложения: {title}")
+    
+    # Удаляем многоточие в конце
+    title = re.sub(r'\.{2,}$', '', title)
+    
     # Если заголовок короче 120 символов, возвращаем как есть
     if len(title) <= 120:
         return title
     
-    # Обрезаем до 120 символов с сохранением целых слов
+    # Обрезаем до 120 символов, но только если это не разрывает слово
     cut_pos = title[:120].rfind(' ')
     if cut_pos > 100:  # Если нашли пробел после 100 символов
-        title = title[:cut_pos] + "..."
+        # Обрезаем без многоточия, так как это нарушает правило "одно предложение"
+        title = title[:cut_pos]
+        # Проверяем, что обрезанный заголовок заканчивается на точку или знак препинания
+        if not re.search(r'[.!?]$', title):
+            # Если нет, то ищем последнюю точку в обрезанном тексте
+            last_dot = title.rfind('.')
+            if last_dot > 50:
+                title = title[:last_dot + 1]
+            else:
+                # Если точки нет, оставляем как есть
+                pass
     else:
         # Если не нашли подходящий пробел, обрезаем по символам
-        title = title[:117] + "..."
+        title = title[:120]
+        # Проверяем, что обрезанный заголовок заканчивается на точку или знак препинания
+        if not re.search(r'[.!?]$', title):
+            last_dot = title.rfind('.')
+            if last_dot > 50:
+                title = title[:last_dot + 1]
     
     return title
+
+def extract_title_and_content(text):
+    """Извлекает заголовок и контент из текста с улучшенной обрезкой"""
+    if not text:
+        return "Новость", ""
+    
+    lines = text.strip().split('\n')
+    title = lines[0].strip() if lines else "Новость"
+    
+    # Используем улучшенную функцию очистки заголовка
+    title = clean_title(title)
+    
+    content = '\n'.join(lines[1:]).strip() if len(lines) > 1 else ""
+    return title, content
 
 # ============ АДАПТИВНАЯ ДЛИНА СТАТЬИ ============
 
@@ -165,12 +207,12 @@ def get_adaptive_prompt(text):
     """
     text_length = len(text.strip())
     
-    # НОВОЕ: Для коротких текстов (до 500 символов) - делаем короткую новость
+    # Для коротких текстов (до 500 символов) - делаем короткую новость
     if text_length <= 500:
-        target_length = min(text_length + 50, 500)  # Чуть длиннее оригинала, но не более 500
+        target_length = min(text_length + 50, 500)
         prompt = f"""Ты редактор новостного сайта. Это короткая новость. Перепиши её в строгом городском формате, объемом РОВНО {target_length} символов (не больше и не меньше). 
         
-Сделай КОРОТКИЙ ИНТЕРЕСНЫЙ ЗАГОЛОВОК (НЕ БОЛЕЕ 100 СИМВОЛОВ). Заголовок должен быть четким и информативным. Никаких смайликов. Не используй символы # и ** в ответе. Сохрани главные факты.
+Сделай ЗАГОЛОВОК ИЗ ОДНОГО ПРЕДЛОЖЕНИЯ (НЕ БОЛЕЕ 100 СИМВОЛОВ). Заголовок должен быть четким, информативным и передавать всю суть новости. НЕ ИСПОЛЬЗУЙ многоточие в конце заголовка. НЕ ДЕЛАЙ два предложения в заголовке - только ОДНО предложение. Никаких смайликов. Не используй символы # и ** в ответе. Сохрани главные факты.
 
 ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст."""
     
@@ -178,7 +220,7 @@ def get_adaptive_prompt(text):
         target_length = 600
         prompt = f"""Ты редактор новостного сайта. Перепиши новость в строгом городском формате, объемом РОВНО {target_length} символов (не больше и не меньше). 
         
-Сделай КОРОТКИЙ ИНТЕРЕСНЫЙ ЗАГОЛОВОК (НЕ БОЛЕЕ 120 СИМВОЛОВ). Заголовок должен быть четким и информативным. Никаких смайликов. Не используй символы # и ** в ответе. Сохрани главные факты. Расставь абзацы.
+Сделай ЗАГОЛОВОК ИЗ ОДНОГО ПРЕДЛОЖЕНИЯ (НЕ БОЛЕЕ 120 СИМВОЛОВ). Заголовок должен быть четким, информативным и передавать всю суть новости. НЕ ИСПОЛЬЗУЙ многоточие в конце заголовка. НЕ ДЕЛАЙ два предложения в заголовке - только ОДНО предложение. Никаких смайликов. Не используй символы # и ** в ответе. Сохрани главные факты. Расставь абзацы.
 
 ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст."""
     
@@ -186,7 +228,7 @@ def get_adaptive_prompt(text):
         target_length = 800
         prompt = f"""Ты редактор новостного сайта. Это длинная новость. Сделай из неё качественную статью в строгом городском формате, объемом РОВНО {target_length} символов (не больше и не меньше). 
         
-Сделай КОРОТКИЙ ИНТЕРЕСНЫЙ ЗАГОЛОВОК (НЕ БОЛЕЕ 120 СИМВОЛОВ). Заголовок должен быть четким и информативным. Никаких смайликов. Не используй символы # и ** в ответе. Сохрани все главные факты. Расставь абзацы.
+Сделай ЗАГОЛОВОК ИЗ ОДНОГО ПРЕДЛОЖЕНИЯ (НЕ БОЛЕЕ 120 СИМВОЛОВ). Заголовок должен быть четким, информативным и передавать всю суть новости. НЕ ИСПОЛЬЗУЙ многоточие в конце заголовка. НЕ ДЕЛАЙ два предложения в заголовке - только ОДНО предложение. Никаких смайликов. Не используй символы # и ** в ответе. Сохрани все главные факты. Расставь абзацы.
 
 ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст."""
     
@@ -343,20 +385,6 @@ def get_channel_id():
         logger.error(f"❌ Ошибка получения ID канала: {e}")
         return CHANNEL_ID
 
-def extract_title_and_content(text):
-    """Извлекает заголовок и контент из текста с улучшенной обрезкой"""
-    if not text:
-        return "Новый пост из Telegram", ""
-    
-    lines = text.strip().split('\n')
-    title = lines[0].strip() if lines else "Новый пост"
-    
-    # Используем улучшенную функцию очистки заголовка
-    title = clean_title(title)
-    
-    content = '\n'.join(lines[1:]).strip() if len(lines) > 1 else ""
-    return title, content
-
 def tg_send_message(chat_id, text, reply_markup=None, parse_mode=None):
     url = f"{TG_API_URL}/sendMessage"
     data = {'chat_id': chat_id, 'text': text}
@@ -474,7 +502,7 @@ def generate_seo_description(title, content, post_type=None):
 
 # ============ ФУНКЦИИ ДЛЯ РАБОТЫ С ИЗОБРАЖЕНИЯМИ ============
 
-def add_noise_to_image(image, noise_level=0.15):  # ИЗМЕНЕНО: 0.2 -> 0.15 (15%)
+def add_noise_to_image(image, noise_level=0.15):
     """
     Добавляет шум к изображению используя только PIL
     noise_level - уровень шума (0.15 = 15%)
@@ -517,15 +545,15 @@ def add_noise_to_image(image, noise_level=0.15):  # ИЗМЕНЕНО: 0.2 -> 0.1
         return image
 
 def unique_image(image_bytes, is_video_thumbnail=False):
-    """Уникализация изображения с добавлением шума 15%"""  # ИЗМЕНЕНО: 20% -> 15%
+    """Уникализация изображения с добавлением шума 15%"""
     try:
         image = Image.open(io.BytesIO(image_bytes))
         
         if image.mode in ('RGBA', 'LA', 'P'):
             image = image.convert('RGB')
         
-        # Добавляем шум 15%  # ИЗМЕНЕНО: 20% -> 15%
-        image = add_noise_to_image(image, noise_level=0.15)  # ИЗМЕНЕНО: 0.2 -> 0.15
+        # Добавляем шум 15%
+        image = add_noise_to_image(image, noise_level=0.15)
         
         method = random.choice([
             'resize_sharpen',
@@ -597,7 +625,7 @@ def unique_image(image_bytes, is_video_thumbnail=False):
         buffer.seek(0)
         unique_bytes = buffer.getvalue()
         
-        logger.info(f"✅ Фото уникализировано с шумом 15%: {len(unique_bytes)} байт")  # ИЗМЕНЕНО: 20% -> 15%
+        logger.info(f"✅ Фото уникализировано с шумом 15%: {len(unique_bytes)} байт")
         return unique_bytes
         
     except Exception as e:
@@ -647,7 +675,7 @@ def download_and_upload_photo(file_id, is_video=False, is_thumbnail=False, title
         if not is_video:
             is_video_thumbnail = is_thumbnail
             media_content = unique_image(media_content, is_video_thumbnail)
-            logger.info(f"✅ Фото уникализировано с шумом 15%, новый размер: {len(media_content)} байт")  # ИЗМЕНЕНО: 20% -> 15%
+            logger.info(f"✅ Фото уникализировано с шумом 15%, новый размер: {len(media_content)} байт")
         
         ext = 'mp4' if is_video else 'jpg'
         mime = 'video/mp4' if is_video else 'image/jpeg'
@@ -749,7 +777,7 @@ def process_text_with_deepseek(text, prompt_type='full', target_length=None):
     try:
         if prompt_type == 'full':
             prompt, target_length = get_adaptive_prompt(text)
-            system_prompt = f"Ты редактор новостного сайта. Отвечай только готовым новостным текстом ровно на {target_length} символов, без пояснений и вступлений. Заголовок должен быть не более 120 символов."
+            system_prompt = f"Ты редактор новостного сайта. Отвечай только готовым новостным текстом ровно на {target_length} символов, без пояснений и вступлений. Заголовок должен быть ОДНИМ предложением, без многоточия, не более 120 символов."
             max_tokens = target_length + 200
         
         elif prompt_type == 'telegram':
@@ -764,7 +792,7 @@ def process_text_with_deepseek(text, prompt_type='full', target_length=None):
         
         else:
             prompt = DEEPSEEK_PROMPT
-            system_prompt = "Ты редактор новостного сайта. Отвечай только готовым новостным текстом, без пояснений и вступлений. Заголовок должен быть не более 120 символов."
+            system_prompt = "Ты редактор новостного сайта. Отвечай только готовым новостным текстом, без пояснений и вступлений. Заголовок должен быть ОДНИМ предложением, без многоточия, не более 120 символов."
             max_tokens = 1000
         
         response = requests.post(
@@ -795,12 +823,8 @@ def process_text_with_deepseek(text, prompt_type='full', target_length=None):
                 if lines:
                     # Очищаем заголовок
                     title = lines[0].strip()
-                    # Удаляем точки в конце заголовка
-                    if title.endswith('.'):
-                        title = title[:-1]
-                    # Ограничиваем длину
-                    if len(title) > 120:
-                        title = clean_title(title)
+                    # Используем функцию clean_title для приведения к одному предложению
+                    title = clean_title(title)
                     # Обновляем результат с новым заголовком
                     if len(lines) > 1:
                         result = title + '\n' + '\n'.join(lines[1:])
@@ -815,7 +839,6 @@ def process_text_with_deepseek(text, prompt_type='full', target_length=None):
                     
                     # Для коротких новостей (до 500 символов) не так строго проверяем длину
                     if target_length <= 500:
-                        # Допускаем отклонение ±30 символов для коротких новостей
                         if abs(content_length - target_length) > 30:
                             logger.info(f"📏 Длина контента {content_length} символов, цель {target_length}, корректирую...")
                             retry_prompt = f"""Исправь этот текст до РОВНО {target_length} символов (сейчас {content_length} символов). Сохрани все главные факты. Заголовок оставь как есть.
@@ -840,8 +863,13 @@ def process_text_with_deepseek(text, prompt_type='full', target_length=None):
                                 result = retry_response.json()["choices"][0]["message"]["content"].strip()
                                 result = re.sub(r'^#+\s+', '', result, flags=re.MULTILINE)
                                 result = result.strip()
+                                # Повторно очищаем заголовок
+                                lines = result.split('\n')
+                                if lines:
+                                    title = clean_title(lines[0].strip())
+                                    if len(lines) > 1:
+                                        result = title + '\n' + '\n'.join(lines[1:])
                     else:
-                        # Для длинных новостей используем старую логику (отклонение 50 символов)
                         if abs(content_length - target_length) > 50:
                             logger.info(f"📏 Длина контента {content_length} символов, цель {target_length}, корректирую...")
                             retry_prompt = f"""Исправь этот текст до РОВНО {target_length} символов (сейчас {content_length} символов). Сохрани все главные факты. Заголовок оставь как есть.
@@ -866,6 +894,12 @@ def process_text_with_deepseek(text, prompt_type='full', target_length=None):
                                 result = retry_response.json()["choices"][0]["message"]["content"].strip()
                                 result = re.sub(r'^#+\s+', '', result, flags=re.MULTILINE)
                                 result = result.strip()
+                                # Повторно очищаем заголовок
+                                lines = result.split('\n')
+                                if lines:
+                                    title = clean_title(lines[0].strip())
+                                    if len(lines) > 1:
+                                        result = title + '\n' + '\n'.join(lines[1:])
             
             # Для Telegram проверяем длину
             if prompt_type in ['telegram', 'telegram_rewrite']:
@@ -940,6 +974,9 @@ def process_text_with_deepseek(text, prompt_type='full', target_length=None):
 def create_wp_post(title, content, post_type, category_slug=None, media_id=None, publish=False, video_url=None, is_video=False, gallery_ids=None, schedule_time=None):
     """Создание поста в WordPress с правильной установкой рубрики"""
     status = 'future' if schedule_time else ('publish' if publish else 'draft')
+    
+    # Очищаем заголовок перед отправкой
+    title = clean_title(title)
     
     final_content = content
     if is_video and video_url:
@@ -1179,6 +1216,9 @@ def publish_to_telegram_channel(title, content, post_link, media_file_id=None, v
         chat_id = get_channel_id()
         logger.info(f"📢 Использую chat_id: {chat_id}")
         
+        # Очищаем заголовок
+        title = clean_title(title)
+        
         emoji = get_emoji_for_text(title + " " + content)
         logger.info(f"🎯 Выбран смайлик: {emoji}")
         
@@ -1252,6 +1292,7 @@ def publish_to_telegram_channel(title, content, post_link, media_file_id=None, v
     except Exception as e:
         logger.error(f"❌ Ошибка публикации в Telegram канал: {e}")
         try:
+            title = clean_title(title)
             emoji = get_emoji_for_text(title + " " + content)
             shortened_content = shorten_text_for_telegram(content)
             telegram_text = f"{emoji} <b>{title}</b>\n\n{shortened_content}\n\n📖 Читать статью полностью на нашем сайте: {post_link}"
@@ -1263,6 +1304,9 @@ def preview_telegram_post(title, content, post_link, chat_id, post_key, media_fi
     """Показывает предпросмотр поста перед публикацией в Telegram канал"""
     try:
         logger.info(f"📢 Показываю предпросмотр для публикации в Telegram...")
+        
+        # Очищаем заголовок
+        title = clean_title(title)
         
         emoji = get_emoji_for_text(title + " " + content)
         logger.info(f"🎯 Выбран смайлик: {emoji}")
@@ -1398,6 +1442,8 @@ def rewrite_telegram_text(post_key, chat_id, message_id):
             telegram_preview[post_key]['content'] = content
             telegram_preview[post_key]['rewritten_content'] = new_content
             
+            # Очищаем заголовок
+            title = clean_title(title)
             emoji = post_data.get('emoji', get_emoji_for_text(title + " " + content))
             media_type = "🎬 Видео" if post_data.get('video_file_id') else "📸 Фото" if post_data.get('media_file_id') else "📝 Текст"
             
@@ -1487,6 +1533,9 @@ def publish_scheduled_post(post_key):
         content = post_data.get('content', '')
         category_slug = post_data.get('category_slug')
         is_video = post_data.get('is_video', False)
+        
+        # Очищаем заголовок
+        title = clean_title(title)
         
         video_url = None
         
@@ -1730,6 +1779,10 @@ def process_update(update_json):
                     
                     keyboard = get_action_keyboard(post_key)
                     
+                    # Очищаем заголовок
+                    title = clean_title(post_data.get('title', 'Без заголовка'))
+                    post_data['title'] = title
+                    
                     section_name = POST_TYPES.get(post_data['post_type'], post_data['post_type'])
                     cat_data = CATEGORIES.get(post_data['post_type'], {}).get(category_slug, {})
                     category_name = cat_data.get('name', category_slug)
@@ -1738,7 +1791,7 @@ def process_update(update_json):
                     
                     new_text = f"✅ Выбран раздел: {section_name}\n"
                     new_text += f"✅ Выбрана рубрика: {category_name}\n\n"
-                    new_text += f"📌 {post_data.get('title', 'Без заголовка')}\n\n"
+                    new_text += f"📌 {title}\n\n"
                     new_text += f"📝 {post_data.get('content', '')[:300]}...\n\n"
                     new_text += f"{media_type.capitalize()}: {has_media}\n\n"
                     new_text += "Выбери действие:"
@@ -1755,13 +1808,17 @@ def process_update(update_json):
                     
                     keyboard = get_action_keyboard(post_key)
                     
+                    # Очищаем заголовок
+                    title = clean_title(post_data.get('title', 'Без заголовка'))
+                    post_data['title'] = title
+                    
                     section_name = POST_TYPES.get(post_data['post_type'], post_data['post_type'])
                     media_type = "видео" if post_data.get('is_video') else "фото" if post_data.get('media_file_id') else "нет"
                     has_media = "есть" if post_data.get('media_file_id') else "нет"
                     
                     new_text = f"✅ Выбран раздел: {section_name}\n"
                     new_text += f"⏩ Без рубрики\n\n"
-                    new_text += f"📌 {post_data.get('title', 'Без заголовка')}\n\n"
+                    new_text += f"📌 {title}\n\n"
                     new_text += f"📝 {post_data.get('content', '')[:300]}...\n\n"
                     new_text += f"{media_type.capitalize()}: {has_media}\n\n"
                     new_text += "Выбери действие:"
@@ -1789,6 +1846,10 @@ def process_update(update_json):
                 video_file_id = post_data.get('video_file_id')
                 gallery_file_ids = post_data.get('gallery_file_ids', [])
                 title = post_data.get('title', '')
+                
+                # Очищаем заголовок
+                title = clean_title(title)
+                post_data['title'] = title
                 
                 featured_media_id = None
                 video_media_id = None
@@ -1822,7 +1883,7 @@ def process_update(update_json):
                 time_str = schedule_time.strftime('%d.%m.%Y %H:%M')
                 
                 scheduled_posts[post_key] = {
-                    'title': post_data['title'],
+                    'title': title,
                     'content': post_data['content'],
                     'post_type': post_data['post_type'],
                     'category_slug': post_data.get('category_slug'),
@@ -1848,7 +1909,7 @@ def process_update(update_json):
                     f"✅ Пост запланирован!\n\n"
                     f"⏰ Публикация: {time_str}\n"
                     f"📂 Раздел: {POST_TYPES.get(post_data['post_type'], post_data['post_type'])}\n"
-                    f"📝 Заголовок: {post_data['title']}\n"
+                    f"📝 Заголовок: {title}\n"
                     f"📸 Медиа: {len(gallery_ids) + (1 if featured_media_id else 0)} файлов загружено\n\n"
                     f"🕐 Через {minutes} минут пост будет опубликован автоматически."
                 )
@@ -1906,6 +1967,10 @@ def process_update(update_json):
                 post_type = post_data.get('post_type', 'news')
                 content = post_data.get('content', '')
                 category_slug = post_data.get('category_slug')
+                
+                # Очищаем заголовок
+                title = clean_title(title)
+                post_data['title'] = title
                 
                 video_url = None
                 gallery_ids = []
@@ -2003,6 +2068,10 @@ def process_update(update_json):
                 post_type = post_data.get('post_type', 'news')
                 content = post_data.get('content', '')
                 category_slug = post_data.get('category_slug')
+                
+                # Очищаем заголовок
+                title = clean_title(title)
+                post_data['title'] = title
                 
                 video_url = None
                 gallery_ids = []
