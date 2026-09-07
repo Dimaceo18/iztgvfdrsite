@@ -545,15 +545,15 @@ def add_noise_to_image(image, noise_level=0.15):
         return image
 
 def unique_image(image_bytes, is_video_thumbnail=False):
-    """Уникализация изображения с добавлением шума 15%"""
+    """Уникализация изображения с добавлением шума 7%"""
     try:
         image = Image.open(io.BytesIO(image_bytes))
         
         if image.mode in ('RGBA', 'LA', 'P'):
             image = image.convert('RGB')
         
-        # Добавляем шум 15%
-        image = add_noise_to_image(image, noise_level=0.15)
+        # Добавляем шум 7%
+        image = add_noise_to_image(image, noise_level=0.07)
         
         method = random.choice([
             'resize_sharpen',
@@ -625,7 +625,7 @@ def unique_image(image_bytes, is_video_thumbnail=False):
         buffer.seek(0)
         unique_bytes = buffer.getvalue()
         
-        logger.info(f"✅ Фото уникализировано с шумом 15%: {len(unique_bytes)} байт")
+        logger.info(f"✅ Фото уникализировано с шумом 7%, новый размер: {len(unique_bytes)} байт")
         return unique_bytes
         
     except Exception as e:
