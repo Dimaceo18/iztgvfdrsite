@@ -234,20 +234,20 @@ def get_adaptive_prompt(text):
     
     return prompt, target_length
 
-TELEGRAM_SHORT_PROMPT = """Напиши краткую версию новости ровно на 500 символов. Сохрани все главные факты и суть. Текст должен быть связным, логичным и заканчиваться законченной мыслью.
+TELEGRAM_SHORT_PROMPT = """Напиши краткую версию новости ровно на 700 символов. Сохрани все главные факты и суть. Текст должен быть связным, логичным и заканчиваться законченной мыслью.
 
 Важно:
-- Ровно 500 символов
+- Ровно 700 символов
 - Без троеточия
 - Без смайликов
 - Без символов # и **
 - Без слов "Заголовок:" и "Текст:"
 - Только готовый текст"""
 
-TELEGRAM_REWRITE_PROMPT = """Перепиши этот текст для Telegram-канала по-другому, сохранив все главные факты и суть. Сделай текст ровно 500 символов. Он должен быть связным, логичным и заканчиваться законченной мыслью.
+TELEGRAM_REWRITE_PROMPT = """Перепиши этот текст для Telegram-канала по-другому, сохранив все главные факты и суть. Сделай текст ровно 700 символов. Он должен быть связным, логичным и заканчиваться законченной мыслью.
 
 Важно:
-- Ровно 500 символов
+- Ровно 700 символов
 - Без троеточия
 - Без смайликов
 - Без символов # и **
@@ -782,13 +782,13 @@ def process_text_with_deepseek(text, prompt_type='full', target_length=None):
         
         elif prompt_type == 'telegram':
             prompt = TELEGRAM_SHORT_PROMPT
-            system_prompt = "Ты редактор новостного канала в Telegram. Напиши краткую версию новости ровно 500 символов. Ответь только готовым текстом."
-            max_tokens = 700
+            system_prompt = "Ты редактор новостного канала в Telegram. Напиши краткую версию новости ровно 700 символов. Ответь только готовым текстом."
+            max_tokens = 900
         
         elif prompt_type == 'telegram_rewrite':
             prompt = TELEGRAM_REWRITE_PROMPT
-            system_prompt = "Ты редактор новостного канала в Telegram. Перепиши текст по-другому, ровно 500 символов. Ответь только готовым текстом."
-            max_tokens = 700
+            system_prompt = "Ты редактор новостного канала в Telegram. Перепиши текст по-другому, ровно 700 символов. Ответь только готовым текстом."
+            max_tokens = 900
         
         else:
             prompt = DEEPSEEK_PROMPT
@@ -901,11 +901,11 @@ def process_text_with_deepseek(text, prompt_type='full', target_length=None):
                                     if len(lines) > 1:
                                         result = title + '\n' + '\n'.join(lines[1:])
             
-            # Для Telegram проверяем длину
+            # Для Telegram проверяем длину (700 символов)
             if prompt_type in ['telegram', 'telegram_rewrite']:
-                if len(result) > 520:
-                    logger.info(f"📏 Текст {len(result)} символов, прошу ИИ сократить до 500")
-                    retry_prompt = f"""Сократи следующий текст ровно до 500 символов. Сохрани все главные факты и суть. Текст должен быть законченным и логичным.
+                if len(result) > 720:
+                    logger.info(f"📏 Текст {len(result)} символов, прошу ИИ сократить до 700")
+                    retry_prompt = f"""Сократи следующий текст ровно до 700 символов. Сохрани все главные факты и суть. Текст должен быть законченным и логичным.
 
 Текст для сокращения:
 {result}"""
@@ -915,11 +915,11 @@ def process_text_with_deepseek(text, prompt_type='full', target_length=None):
                         json={
                             "model": "deepseek-chat",
                             "messages": [
-                                {"role": "system", "content": "Ты редактор. Сократи текст ровно до 500 символов. Ответь только готовым текстом."},
+                                {"role": "system", "content": "Ты редактор. Сократи текст ровно до 700 символов. Ответь только готовым текстом."},
                                 {"role": "user", "content": retry_prompt}
                             ],
                             "temperature": 0.5,
-                            "max_tokens": 600
+                            "max_tokens": 800
                         },
                         timeout=60
                     )
@@ -928,19 +928,19 @@ def process_text_with_deepseek(text, prompt_type='full', target_length=None):
                         result = re.sub(r'^#+\s+', '', result, flags=re.MULTILINE)
                         result = result.strip()
                 
-                if len(result) > 500:
-                    cut_pos = result[:500].rfind('.')
-                    if cut_pos > 450:
+                if len(result) > 700:
+                    cut_pos = result[:700].rfind('.')
+                    if cut_pos > 650:
                         result = result[:cut_pos + 1]
                     else:
-                        cut_pos = result[:500].rfind(' ')
-                        if cut_pos > 450:
+                        cut_pos = result[:700].rfind(' ')
+                        if cut_pos > 650:
                             result = result[:cut_pos]
                         else:
-                            result = result[:500]
-                elif len(result) < 480:
-                    logger.info(f"📏 Текст {len(result)} символов, прошу ИИ дополнить до 500")
-                    retry_prompt = f"""Дополни следующий текст до 500 символов, сохранив стиль и смысл. Добавь важные детали.
+                            result = result[:700]
+                elif len(result) < 680:
+                    logger.info(f"📏 Текст {len(result)} символов, прошу ИИ дополнить до 700")
+                    retry_prompt = f"""Дополни следующий текст до 700 символов, сохранив стиль и смысл. Добавь важные детали.
 
 Текст для дополнения:
 {result}"""
@@ -950,11 +950,11 @@ def process_text_with_deepseek(text, prompt_type='full', target_length=None):
                         json={
                             "model": "deepseek-chat",
                             "messages": [
-                                {"role": "system", "content": "Ты редактор. Дополни текст до 500 символов. Ответь только готовым текстом."},
+                                {"role": "system", "content": "Ты редактор. Дополни текст до 700 символов. Ответь только готовым текстом."},
                                 {"role": "user", "content": retry_prompt}
                             ],
                             "temperature": 0.5,
-                            "max_tokens": 600
+                            "max_tokens": 800
                         },
                         timeout=60
                     )
@@ -962,8 +962,8 @@ def process_text_with_deepseek(text, prompt_type='full', target_length=None):
                         result = retry_response.json()["choices"][0]["message"]["content"].strip()
                         result = re.sub(r'^#+\s+', '', result, flags=re.MULTILINE)
                         result = result.strip()
-                        if len(result) > 500:
-                            result = result[:500]
+                        if len(result) > 700:
+                            result = result[:700]
             
             return result
         return None
@@ -1112,17 +1112,17 @@ def clean_html_for_telegram(text):
     return text
 
 def shorten_text_for_telegram(text, rewrite=False):
-    """Создает краткую версию текста для Telegram через ИИ (ровно 500 символов)"""
+    """Создает краткую версию текста для Telegram через ИИ (ровно 700 символов)"""
     try:
         clean_text = clean_html_for_telegram(text)
         
-        if len(clean_text) == 500 and not rewrite:
-            logger.info(f"✅ Текст уже ровно 500 символов")
+        if len(clean_text) == 700 and not rewrite:
+            logger.info(f"✅ Текст уже ровно 700 символов")
             return clean_text
         
-        if len(clean_text) < 500 and not rewrite:
-            logger.info(f"📏 Текст {len(clean_text)} символов, дополняю до 500")
-            retry_prompt = f"""Дополни следующий текст до 500 символов, сохранив стиль и смысл. Добавь важные детали, если их не хватает. Текст должен быть связным и логичным.
+        if len(clean_text) < 700 and not rewrite:
+            logger.info(f"📏 Текст {len(clean_text)} символов, дополняю до 700")
+            retry_prompt = f"""Дополни следующий текст до 700 символов, сохранив стиль и смысл. Добавь важные детали, если их не хватает. Текст должен быть связным и логичным.
 
 Текст для дополнения (сейчас {len(clean_text)} символов):
 {clean_text}"""
@@ -1135,11 +1135,11 @@ def shorten_text_for_telegram(text, rewrite=False):
                         json={
                             "model": "deepseek-chat",
                             "messages": [
-                                {"role": "system", "content": "Ты редактор. Дополни текст до 500 символов. Ответь только готовым текстом без пояснений."},
+                                {"role": "system", "content": "Ты редактор. Дополни текст до 700 символов. Ответь только готовым текстом без пояснений."},
                                 {"role": "user", "content": retry_prompt}
                             ],
                             "temperature": 0.5,
-                            "max_tokens": 600
+                            "max_tokens": 800
                         },
                         timeout=60
                     )
@@ -1148,18 +1148,18 @@ def shorten_text_for_telegram(text, rewrite=False):
                         result = re.sub(r'^#+\s+', '', result, flags=re.MULTILINE)
                         result = result.strip()
                         
-                        if len(result) >= 480:
-                            if len(result) > 500:
-                                result = result[:500]
+                        if len(result) >= 680:
+                            if len(result) > 700:
+                                result = result[:700]
                             logger.info(f"✅ Текст дополнен до {len(result)} символов (попытка {attempt+1})")
                             return result
                     time.sleep(1)
                 except Exception as e:
                     logger.error(f"Ошибка при дополнении текста: {e}")
             
-            if len(clean_text) < 500:
+            if len(clean_text) < 700:
                 logger.warning("⚠️ Не удалось дополнить текст через ИИ, дополняю вручную")
-                return clean_text + " " * (500 - len(clean_text))
+                return clean_text + " " * (700 - len(clean_text))
         
         logger.info(f"🤖 Создаю {'новую' if rewrite else 'краткую'} версию текста для Telegram (сейчас {len(clean_text)} символов)")
         
@@ -1171,16 +1171,67 @@ def shorten_text_for_telegram(text, rewrite=False):
             return result
         
         logger.warning("⚠️ Не удалось создать текст через ИИ, обрезаю вручную")
-        if len(clean_text) > 500:
-            return clean_text[:500]
+        if len(clean_text) > 700:
+            return clean_text[:700]
         return clean_text
             
     except Exception as e:
         logger.error(f"❌ Ошибка обработки текста: {e}")
         clean_text = clean_html_for_telegram(text)
-        if len(clean_text) > 500:
-            return clean_text[:500]
+        if len(clean_text) > 700:
+            return clean_text[:700]
         return clean_text
+
+def insert_link_in_first_sentence(text, post_link):
+    """
+    Вставляет гиперссылку в одно из слов первого предложения.
+    Возвращает текст с HTML-ссылкой.
+    """
+    try:
+        if not text or not post_link:
+            return text
+        
+        # Разбиваем на первое предложение и остальной текст
+        # Ищем конец первого предложения
+        match = re.search(r'([.!?])\s+', text)
+        
+        if match:
+            first_sentence = text[:match.end()].strip()
+            rest_text = text[match.end():].strip()
+        else:
+            # Если нет знаков препинания, все предложение - первое
+            first_sentence = text.strip()
+            rest_text = ""
+        
+        # Находим слова в первом предложении (длиной от 3 символов)
+        words = re.findall(r'\b[А-Яа-яЁёA-Za-z]{3,}\b', first_sentence)
+        
+        if not words:
+            # Если нет подходящих слов, просто возвращаем текст с ссылкой в конце первого предложения
+            if rest_text:
+                return first_sentence + f' <a href="{post_link}">Подробнее</a>. ' + rest_text
+            else:
+                return text + f' <a href="{post_link}">Подробнее</a>.'
+        
+        # Выбираем случайное слово для гиперссылки
+        word_to_link = random.choice(words)
+        
+        # Заменяем первое вхождение этого слова на гиперссылку
+        # Используем регулярное выражение для замены только целого слова
+        pattern = re.compile(r'\b' + re.escape(word_to_link) + r'\b', re.IGNORECASE)
+        
+        # Заменяем только первое вхождение
+        linked_first_sentence = pattern.sub(f'<a href="{post_link}">{word_to_link}</a>', first_sentence, count=1)
+        
+        if rest_text:
+            return linked_first_sentence + ' ' + rest_text
+        else:
+            return linked_first_sentence
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка вставки ссылки: {e}")
+        # В случае ошибки возвращаем текст с ссылкой в конце
+        return text + f' <a href="{post_link}">Подробнее</a>.'
 
 def send_text_only_to_telegram(text):
     """Отправляет только текст в Telegram канал"""
@@ -1205,7 +1256,7 @@ def send_text_only_to_telegram(text):
         return False
 
 def publish_to_telegram_channel(title, content, post_link, media_file_id=None, video_file_id=None, gallery_file_ids=None):
-    """Публикует пост в Telegram канал с сокращением текста до 500 символов"""
+    """Публикует пост в Telegram канал с сокращением текста до 700 символов и гиперссылкой в первом предложении"""
     try:
         logger.info(f"📢 Начинаю публикацию в Telegram канал...")
         
@@ -1222,8 +1273,15 @@ def publish_to_telegram_channel(title, content, post_link, media_file_id=None, v
         emoji = get_emoji_for_text(title + " " + content)
         logger.info(f"🎯 Выбран смайлик: {emoji}")
         
+        # Получаем сокращенный текст до 700 символов
         shortened_content = shorten_text_for_telegram(content)
-        telegram_text = f"{emoji} <b>{title}</b>\n\n{shortened_content}\n\n📖 Читать статью полностью на нашем сайте: {post_link}"
+        
+        # Вставляем гиперссылку в первое предложение
+        content_with_link = insert_link_in_first_sentence(shortened_content, post_link)
+        logger.info(f"🔗 Гиперссылка вставлена в первое предложение")
+        
+        # Формируем текст поста БЕЗ ссылки в конце
+        telegram_text = f"{emoji} <b>{title}</b>\n\n{content_with_link}"
         
         if video_file_id:
             logger.info(f"🎬 Отправляю видео в Telegram канал")
@@ -1295,7 +1353,8 @@ def publish_to_telegram_channel(title, content, post_link, media_file_id=None, v
             title = clean_title(title)
             emoji = get_emoji_for_text(title + " " + content)
             shortened_content = shorten_text_for_telegram(content)
-            telegram_text = f"{emoji} <b>{title}</b>\n\n{shortened_content}\n\n📖 Читать статью полностью на нашем сайте: {post_link}"
+            content_with_link = insert_link_in_first_sentence(shortened_content, post_link)
+            telegram_text = f"{emoji} <b>{title}</b>\n\n{content_with_link}"
             return send_text_only_to_telegram(telegram_text)
         except:
             return False
@@ -1313,12 +1372,15 @@ def preview_telegram_post(title, content, post_link, chat_id, post_key, media_fi
         
         shortened_content = shorten_text_for_telegram(content)
         
+        # Вставляем гиперссылку в первое предложение
+        content_with_link = insert_link_in_first_sentence(shortened_content, post_link)
+        
         media_type = "🎬 Видео" if video_file_id else "📸 Фото" if media_file_id else "📝 Текст"
         
         preview_text = f"<b>📢 ПРЕДПРОСМОТР ПУБЛИКАЦИИ В КАНАЛ</b>\n\n"
         preview_text += f"<b>Смайлик:</b> {emoji}\n"
         preview_text += f"<b>Заголовок:</b>\n{title}\n\n"
-        preview_text += f"<b>Текст (500 символов):</b>\n{shortened_content}\n\n"
+        preview_text += f"<b>Текст (700 символов):</b>\n{content_with_link}\n\n"
         preview_text += f"<b>Медиа:</b> {media_type}\n"
         preview_text += f"<b>Ссылка:</b>\n{post_link}\n\n"
         preview_text += f"<i>⬇️ Выберите действие:</i>"
@@ -1433,6 +1495,7 @@ def rewrite_telegram_text(post_key, chat_id, message_id):
         post_data = telegram_preview[post_key]
         title = post_data['title']
         content = post_data['content']
+        post_link = post_data['post_link']
         
         logger.info(f"🔄 Переписываю текст для Telegram через ИИ...")
         
@@ -1447,10 +1510,13 @@ def rewrite_telegram_text(post_key, chat_id, message_id):
             emoji = post_data.get('emoji', get_emoji_for_text(title + " " + content))
             media_type = "🎬 Видео" if post_data.get('video_file_id') else "📸 Фото" if post_data.get('media_file_id') else "📝 Текст"
             
+            # Вставляем гиперссылку в первое предложение
+            content_with_link = insert_link_in_first_sentence(new_content, post_link)
+            
             preview_text = f"<b>📢 ПРЕДПРОСМОТР ПУБЛИКАЦИИ В КАНАЛ (НОВАЯ ВЕРСИЯ)</b>\n\n"
             preview_text += f"<b>Смайлик:</b> {emoji}\n"
             preview_text += f"<b>Заголовок:</b>\n{title}\n\n"
-            preview_text += f"<b>Новый текст (500 символов):</b>\n{new_content}\n\n"
+            preview_text += f"<b>Новый текст (700 символов):</b>\n{content_with_link}\n\n"
             preview_text += f"<b>Медиа:</b> {media_type}\n"
             preview_text += f"<b>Ссылка:</b>\n{post_data['post_link']}\n\n"
             preview_text += f"<i>⬇️ Выберите действие:</i>"
