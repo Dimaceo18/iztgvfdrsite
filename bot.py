@@ -145,7 +145,6 @@ def clean_title(title):
         title = title[:-1]
     
     # Разбиваем на предложения по точкам, вопросительным и восклицательным знакам
-    # Но сохраняем сокращения (например, "г.", "ул.", "др.")
     sentences = re.split(r'(?<!\b[а-я]\.)(?<!\b[а-я][а-я]\.)(?<=[.!?])\s+', title)
     
     # Если больше одного предложения - берем ПЕРВОЕ (самое важное)
@@ -162,22 +161,14 @@ def clean_title(title):
     
     # Обрезаем до 120 символов, но только если это не разрывает слово
     cut_pos = title[:120].rfind(' ')
-    if cut_pos > 100:  # Если нашли пробел после 100 символов
-        # Обрезаем без многоточия, так как это нарушает правило "одно предложение"
+    if cut_pos > 100:
         title = title[:cut_pos]
-        # Проверяем, что обрезанный заголовок заканчивается на точку или знак препинания
         if not re.search(r'[.!?]$', title):
-            # Если нет, то ищем последнюю точку в обрезанном тексте
             last_dot = title.rfind('.')
             if last_dot > 50:
                 title = title[:last_dot + 1]
-            else:
-                # Если точки нет, оставляем как есть
-                pass
     else:
-        # Если не нашли подходящий пробел, обрезаем по символам
         title = title[:120]
-        # Проверяем, что обрезанный заголовок заканчивается на точку или знак препинания
         if not re.search(r'[.!?]$', title):
             last_dot = title.rfind('.')
             if last_dot > 50:
@@ -199,6 +190,73 @@ def extract_title_and_content(text):
     content = '\n'.join(lines[1:]).strip() if len(lines) > 1 else ""
     return title, content
 
+# ============ ФУНКЦИЯ РАССТАНОВКИ АБЗАЦЕВ ============
+
+def format_paragraphs(text, max_paragraph_length=280):
+    """
+    Разбивает сплошной текст на абзацы.
+    Если текст уже содержит абзацы (двойные переносы строк) — оставляет как есть.
+    Иначе разбивает по предложениям, группируя их в абзацы по 2-3 предложения
+    (или до max_paragraph_length символов).
+    """
+    if not text:
+        return text
+    
+    text = text.strip()
+    
+    # Если уже есть абзацы (двойной перенос) — нормализуем и возвращаем
+    if '\n\n' in text:
+        paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+        return '\n\n'.join(paragraphs)
+    
+    # Если есть одиночные переносы — тоже считаем это абзацами
+    if '\n' in text:
+        paragraphs = [p.strip() for p in text.split('\n') if p.strip()]
+        return '\n\n'.join(paragraphs)
+    
+    # Разбиваем на предложения
+    # Регулярка: конец предложения (.!?) + пробел + заглавная буква или цифра
+    sentences = re.split(r'(?<=[.!?])\s+(?=[А-ЯЁA-Z0-9])', text)
+    sentences = [s.strip() for s in sentences if s.strip()]
+    
+    if not sentences:
+        return text
+    
+    # Группируем предложения в абзацы
+    paragraphs = []
+    current_paragraph = []
+    current_length = 0
+    
+    for sentence in sentences:
+        sentence_length = len(sentence)
+        
+        # Если добавление предложения превысит лимит, и в абзаце уже что-то есть — закрываем абзац
+        if current_paragraph and (current_length + sentence_length + 1 > max_paragraph_length):
+            paragraphs.append(' '.join(current_paragraph))
+            current_paragraph = [sentence]
+            current_length = sentence_length
+        else:
+            current_paragraph.append(sentence)
+            current_length += sentence_length + 1
+    
+    # Добавляем последний абзац
+    if current_paragraph:
+        paragraphs.append(' '.join(current_paragraph))
+    
+    # Если получился только один абзац и текст длинный — пробуем разбить по-другому
+    if len(paragraphs) == 1 and len(text) > 400:
+        # Разбиваем примерно пополам по предложениям
+        mid = len(sentences) // 2
+        if mid > 0:
+            paragraphs = [
+                ' '.join(sentences[:mid]),
+                ' '.join(sentences[mid:])
+            ]
+    
+    result = '\n\n'.join(paragraphs)
+    logger.info(f"📄 Текст разбит на {len(paragraphs)} абзацев")
+    return result
+
 # ============ АДАПТИВНАЯ ДЛИНА СТАТЬИ ============
 
 def get_adaptive_prompt(text):
@@ -207,47 +265,51 @@ def get_adaptive_prompt(text):
     """
     text_length = len(text.strip())
     
-    # Для коротких текстов (до 500 символов) - делаем короткую новость
     if text_length <= 500:
         target_length = min(text_length + 50, 500)
         prompt = f"""Ты редактор новостного сайта. Это короткая новость. Перепиши её в строгом городском формате, объемом РОВНО {target_length} символов (не больше и не меньше). 
         
 Сделай ЗАГОЛОВОК ИЗ ОДНОГО ПРЕДЛОЖЕНИЯ (НЕ БОЛЕЕ 100 СИМВОЛОВ). Заголовок должен быть четким, информативным и передавать всю суть новости. НЕ ИСПОЛЬЗУЙ многоточие в конце заголовка. НЕ ДЕЛАЙ два предложения в заголовке - только ОДНО предложение. Никаких смайликов. Не используй символы # и ** в ответе. Сохрани главные факты.
 
-ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст."""
+ВАЖНО: Текст должен быть разбит на 2-3 абзаца, разделенных пустой строкой. НЕ пиши сплошным текстом.
+ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст с абзацами."""
     
     elif text_length <= 1000:
         target_length = 600
         prompt = f"""Ты редактор новостного сайта. Перепиши новость в строгом городском формате, объемом РОВНО {target_length} символов (не больше и не меньше). 
         
-Сделай ЗАГОЛОВОК ИЗ ОДНОГО ПРЕДЛОЖЕНИЯ (НЕ БОЛЕЕ 120 СИМВОЛОВ). Заголовок должен быть четким, информативным и передавать всю суть новости. НЕ ИСПОЛЬЗУЙ многоточие в конце заголовка. НЕ ДЕЛАЙ два предложения в заголовке - только ОДНО предложение. Никаких смайликов. Не используй символы # и ** в ответе. Сохрани главные факты. Расставь абзацы.
+Сделай ЗАГОЛОВОК ИЗ ОДНОГО ПРЕДЛОЖЕНИЯ (НЕ БОЛЕЕ 120 СИМВОЛОВ). Заголовок должен быть четким, информативным и передавать всю суть новости. НЕ ИСПОЛЬЗУЙ многоточие в конце заголовка. НЕ ДЕЛАЙ два предложения в заголовке - только ОДНО предложение. Никаких смайликов. Не используй символы # и ** в ответе. Сохрани главные факты.
 
-ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст."""
+ВАЖНО: Текст должен быть разбит на 3-4 абзаца, разделенных пустой строкой. НЕ пиши сплошным текстом.
+ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст с абзацами."""
     
     else:
         target_length = 800
         prompt = f"""Ты редактор новостного сайта. Это длинная новость. Сделай из неё качественную статью в строгом городском формате, объемом РОВНО {target_length} символов (не больше и не меньше). 
         
-Сделай ЗАГОЛОВОК ИЗ ОДНОГО ПРЕДЛОЖЕНИЯ (НЕ БОЛЕЕ 120 СИМВОЛОВ). Заголовок должен быть четким, информативным и передавать всю суть новости. НЕ ИСПОЛЬЗУЙ многоточие в конце заголовка. НЕ ДЕЛАЙ два предложения в заголовке - только ОДНО предложение. Никаких смайликов. Не используй символы # и ** в ответе. Сохрани все главные факты. Расставь абзацы.
+Сделай ЗАГОЛОВОК ИЗ ОДНОГО ПРЕДЛОЖЕНИЯ (НЕ БОЛЕЕ 120 СИМВОЛОВ). Заголовок должен быть четким, информативным и передавать всю суть новости. НЕ ИСПОЛЬЗУЙ многоточие в конце заголовка. НЕ ДЕЛАЙ два предложения в заголовке - только ОДНО предложение. Никаких смайликов. Не используй символы # и ** в ответе. Сохрани все главные факты.
 
-ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст."""
+ВАЖНО: Текст должен быть разбит на 3-5 абзацев, разделенных пустой строкой. НЕ пиши сплошным текстом.
+ВАЖНО: НЕ пиши слова "Заголовок:" и "Текст:". Просто напиши сначала заголовок, потом пустую строку, потом текст с абзацами."""
     
     return prompt, target_length
 
-TELEGRAM_SHORT_PROMPT = """Напиши краткую версию новости ровно на 700 символов. Сохрани все главные факты и суть. Текст должен быть связным, логичным и заканчиваться законченной мыслью.
+TELEGRAM_SHORT_PROMPT = """Напиши краткую версию новости ровно на 600 символов. Сохрани все главные факты и суть. Текст должен быть связным, логичным и заканчиваться законченной мыслью.
 
 Важно:
-- Ровно 700 символов
+- Ровно 600 символов
+- Текст должен быть разбит на 2-3 абзаца, разделенных пустой строкой. НЕ пиши сплошным текстом.
 - Без троеточия
 - Без смайликов
 - Без символов # и **
 - Без слов "Заголовок:" и "Текст:"
 - Только готовый текст"""
 
-TELEGRAM_REWRITE_PROMPT = """Перепиши этот текст для Telegram-канала по-другому, сохранив все главные факты и суть. Сделай текст ровно 700 символов. Он должен быть связным, логичным и заканчиваться законченной мыслью.
+TELEGRAM_REWRITE_PROMPT = """Перепиши этот текст для Telegram-канала по-другому, сохранив все главные факты и суть. Сделай текст ровно 600 символов. Он должен быть связным, логичным и заканчиваться законченной мыслью.
 
 Важно:
-- Ровно 700 символов
+- Ровно 600 символов
+- Текст должен быть разбит на 2-3 абзаца, разделенных пустой строкой. НЕ пиши сплошным текстом.
 - Без троеточия
 - Без смайликов
 - Без символов # и **
@@ -503,29 +565,22 @@ def generate_seo_description(title, content, post_type=None):
 # ============ ФУНКЦИИ ДЛЯ РАБОТЫ С ИЗОБРАЖЕНИЯМИ ============
 
 def add_noise_to_image(image, noise_level=0.15):
-    """
-    Добавляет шум к изображению используя только PIL
-    noise_level - уровень шума (0.15 = 15%)
-    """
+    """Добавляет шум к изображению используя только PIL"""
     try:
         logger.info(f"📸 Добавляем шум {noise_level*100}% к изображению")
         
-        # Конвертируем в режим RGB если нужно
         if image.mode != 'RGB':
             image = image.convert('RGB')
         
-        # Создаем шумовую маску
         width, height = image.size
         noise_mask = Image.new('RGB', (width, height), (0, 0, 0))
         noise_pixels = noise_mask.load()
         
-        # Генерируем шум
         for x in range(width):
             for y in range(height):
                 noise_value = int(random.uniform(-noise_level * 255, noise_level * 255))
                 noise_pixels[x, y] = (noise_value, noise_value, noise_value)
         
-        # Применяем шум к оригинальному изображению
         image_array = image.load()
         for x in range(width):
             for y in range(height):
@@ -552,7 +607,6 @@ def unique_image(image_bytes, is_video_thumbnail=False):
         if image.mode in ('RGBA', 'LA', 'P'):
             image = image.convert('RGB')
         
-        # Добавляем шум 7%
         image = add_noise_to_image(image, noise_level=0.07)
         
         method = random.choice([
@@ -744,16 +798,22 @@ def download_and_upload_photo(file_id, is_video=False, is_thumbnail=False, title
         return None
 
 def format_content_for_wp(text, video_url=None, gallery_ids=None, is_video=False):
-    """Форматирование контента для WordPress с вставкой видео или галереи"""
+    """Форматирование контента для WordPress с вставкой видео или галереи и разбивкой на абзацы"""
     if not text:
         return ""
     
-    paragraphs = text.split('\n')
+    # Сначала нормализуем абзацы
+    text = format_paragraphs(text)
+    
+    # Разбиваем по двойному переносу строки (абзацы)
+    paragraphs = re.split(r'\n\s*\n', text)
     formatted = []
     
     for i, para in enumerate(paragraphs):
         para = para.strip()
         if para:
+            # Внутри абзаца убираем одиночные переносы (склеиваем)
+            para = ' '.join(para.split())
             para = re.sub(r'(https?://[^\s]+)', r'<a href="\1">\1</a>', para)
             para = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', para)
             para = re.sub(r'\*(.+?)\*', r'<em>\1</em>', para)
@@ -777,22 +837,22 @@ def process_text_with_deepseek(text, prompt_type='full', target_length=None):
     try:
         if prompt_type == 'full':
             prompt, target_length = get_adaptive_prompt(text)
-            system_prompt = f"Ты редактор новостного сайта. Отвечай только готовым новостным текстом ровно на {target_length} символов, без пояснений и вступлений. Заголовок должен быть ОДНИМ предложением, без многоточия, не более 120 символов."
+            system_prompt = f"Ты редактор новостного сайта. Отвечай только готовым новостным текстом ровно на {target_length} символов, без пояснений и вступлений. Заголовок должен быть ОДНИМ предложением, без многоточия, не более 120 символов. Текст ОБЯЗАТЕЛЬНО разбивай на абзацы пустой строкой."
             max_tokens = target_length + 200
         
         elif prompt_type == 'telegram':
             prompt = TELEGRAM_SHORT_PROMPT
-            system_prompt = "Ты редактор новостного канала в Telegram. Напиши краткую версию новости ровно 700 символов. Ответь только готовым текстом."
-            max_tokens = 900
+            system_prompt = "Ты редактор новостного канала в Telegram. Напиши краткую версию новости ровно 600 символов. Текст ОБЯЗАТЕЛЬНО разбивай на 2-3 абзаца пустой строкой. Ответь только готовым текстом."
+            max_tokens = 800
         
         elif prompt_type == 'telegram_rewrite':
             prompt = TELEGRAM_REWRITE_PROMPT
-            system_prompt = "Ты редактор новостного канала в Telegram. Перепиши текст по-другому, ровно 700 символов. Ответь только готовым текстом."
-            max_tokens = 900
+            system_prompt = "Ты редактор новостного канала в Telegram. Перепиши текст по-другому, ровно 600 символов. Текст ОБЯЗАТЕЛЬНО разбивай на 2-3 абзаца пустой строкой. Ответь только готовым текстом."
+            max_tokens = 800
         
         else:
             prompt = DEEPSEEK_PROMPT
-            system_prompt = "Ты редактор новостного сайта. Отвечай только готовым новостным текстом, без пояснений и вступлений. Заголовок должен быть ОДНИМ предложением, без многоточия, не более 120 символов."
+            system_prompt = "Ты редактор новостного сайта. Отвечай только готовым новостным текстом, без пояснений и вступлений. Заголовок должен быть ОДНИМ предложением, без многоточия, не более 120 символов. Текст ОБЯЗАТЕЛЬНО разбивай на абзацы пустой строкой."
             max_tokens = 1000
         
         response = requests.post(
@@ -821,27 +881,25 @@ def process_text_with_deepseek(text, prompt_type='full', target_length=None):
             if prompt_type == 'full' and target_length:
                 lines = result.split('\n')
                 if lines:
-                    # Очищаем заголовок
                     title = lines[0].strip()
-                    # Используем функцию clean_title для приведения к одному предложению
                     title = clean_title(title)
-                    # Обновляем результат с новым заголовком
                     if len(lines) > 1:
                         result = title + '\n' + '\n'.join(lines[1:])
                     else:
                         result = title
                 
-                # Проверяем длину контента
                 lines = result.split('\n')
                 if len(lines) > 1:
                     content_text = '\n'.join(lines[1:]).strip()
+                    content_text = format_paragraphs(content_text)
+                    result = lines[0] + '\n' + content_text
+                    
                     content_length = len(content_text)
                     
-                    # Для коротких новостей (до 500 символов) не так строго проверяем длину
                     if target_length <= 500:
                         if abs(content_length - target_length) > 30:
                             logger.info(f"📏 Длина контента {content_length} символов, цель {target_length}, корректирую...")
-                            retry_prompt = f"""Исправь этот текст до РОВНО {target_length} символов (сейчас {content_length} символов). Сохрани все главные факты. Заголовок оставь как есть.
+                            retry_prompt = f"""Исправь этот текст до РОВНО {target_length} символов (сейчас {content_length} символов). Сохрани все главные факты. Заголовок оставь как есть. Текст ОБЯЗАТЕЛЬНО разбивай на абзацы пустой строкой.
 
 Текст для корректировки:
 {result}"""
@@ -851,7 +909,7 @@ def process_text_with_deepseek(text, prompt_type='full', target_length=None):
                                 json={
                                     "model": "deepseek-chat",
                                     "messages": [
-                                        {"role": "system", "content": f"Ты редактор. Сделай текст ровно {target_length} символов. Ответь только готовым текстом."},
+                                        {"role": "system", "content": f"Ты редактор. Сделай текст ровно {target_length} символов. Текст разбивай на абзацы пустой строкой. Ответь только готовым текстом."},
                                         {"role": "user", "content": retry_prompt}
                                     ],
                                     "temperature": 0.5,
@@ -863,16 +921,16 @@ def process_text_with_deepseek(text, prompt_type='full', target_length=None):
                                 result = retry_response.json()["choices"][0]["message"]["content"].strip()
                                 result = re.sub(r'^#+\s+', '', result, flags=re.MULTILINE)
                                 result = result.strip()
-                                # Повторно очищаем заголовок
                                 lines = result.split('\n')
                                 if lines:
                                     title = clean_title(lines[0].strip())
                                     if len(lines) > 1:
-                                        result = title + '\n' + '\n'.join(lines[1:])
+                                        content_text = format_paragraphs('\n'.join(lines[1:]).strip())
+                                        result = title + '\n' + content_text
                     else:
                         if abs(content_length - target_length) > 50:
                             logger.info(f"📏 Длина контента {content_length} символов, цель {target_length}, корректирую...")
-                            retry_prompt = f"""Исправь этот текст до РОВНО {target_length} символов (сейчас {content_length} символов). Сохрани все главные факты. Заголовок оставь как есть.
+                            retry_prompt = f"""Исправь этот текст до РОВНО {target_length} символов (сейчас {content_length} символов). Сохрани все главные факты. Заголовок оставь как есть. Текст ОБЯЗАТЕЛЬНО разбивай на абзацы пустой строкой.
 
 Текст для корректировки:
 {result}"""
@@ -882,7 +940,7 @@ def process_text_with_deepseek(text, prompt_type='full', target_length=None):
                                 json={
                                     "model": "deepseek-chat",
                                     "messages": [
-                                        {"role": "system", "content": f"Ты редактор. Сделай текст ровно {target_length} символов. Ответь только готовым текстом."},
+                                        {"role": "system", "content": f"Ты редактор. Сделай текст ровно {target_length} символов. Текст разбивай на абзацы пустой строкой. Ответь только готовым текстом."},
                                         {"role": "user", "content": retry_prompt}
                                     ],
                                     "temperature": 0.5,
@@ -894,18 +952,21 @@ def process_text_with_deepseek(text, prompt_type='full', target_length=None):
                                 result = retry_response.json()["choices"][0]["message"]["content"].strip()
                                 result = re.sub(r'^#+\s+', '', result, flags=re.MULTILINE)
                                 result = result.strip()
-                                # Повторно очищаем заголовок
                                 lines = result.split('\n')
                                 if lines:
                                     title = clean_title(lines[0].strip())
                                     if len(lines) > 1:
-                                        result = title + '\n' + '\n'.join(lines[1:])
+                                        content_text = format_paragraphs('\n'.join(lines[1:]).strip())
+                                        result = title + '\n' + content_text
             
-            # Для Telegram проверяем длину (700 символов)
+            # Для Telegram проверяем длину (600 символов)
             if prompt_type in ['telegram', 'telegram_rewrite']:
-                if len(result) > 720:
-                    logger.info(f"📏 Текст {len(result)} символов, прошу ИИ сократить до 700")
-                    retry_prompt = f"""Сократи следующий текст ровно до 700 символов. Сохрани все главные факты и суть. Текст должен быть законченным и логичным.
+                # Нормализуем абзацы
+                result = format_paragraphs(result)
+                
+                if len(result) > 620:
+                    logger.info(f"📏 Текст {len(result)} символов, прошу ИИ сократить до 600")
+                    retry_prompt = f"""Сократи следующий текст ровно до 600 символов. Сохрани все главные факты и суть. Текст должен быть законченным и логичным, разбитым на 2-3 абзаца пустой строкой.
 
 Текст для сокращения:
 {result}"""
@@ -915,7 +976,7 @@ def process_text_with_deepseek(text, prompt_type='full', target_length=None):
                         json={
                             "model": "deepseek-chat",
                             "messages": [
-                                {"role": "system", "content": "Ты редактор. Сократи текст ровно до 700 символов. Ответь только готовым текстом."},
+                                {"role": "system", "content": "Ты редактор. Сократи текст ровно до 600 символов, разбивая на абзацы пустой строкой. Ответь только готовым текстом."},
                                 {"role": "user", "content": retry_prompt}
                             ],
                             "temperature": 0.5,
@@ -927,20 +988,22 @@ def process_text_with_deepseek(text, prompt_type='full', target_length=None):
                         result = retry_response.json()["choices"][0]["message"]["content"].strip()
                         result = re.sub(r'^#+\s+', '', result, flags=re.MULTILINE)
                         result = result.strip()
+                        result = format_paragraphs(result)
                 
-                if len(result) > 700:
-                    cut_pos = result[:700].rfind('.')
-                    if cut_pos > 650:
+                if len(result) > 600:
+                    cut_pos = result[:600].rfind('.')
+                    if cut_pos > 550:
                         result = result[:cut_pos + 1]
                     else:
-                        cut_pos = result[:700].rfind(' ')
-                        if cut_pos > 650:
+                        cut_pos = result[:600].rfind(' ')
+                        if cut_pos > 550:
                             result = result[:cut_pos]
                         else:
-                            result = result[:700]
-                elif len(result) < 680:
-                    logger.info(f"📏 Текст {len(result)} символов, прошу ИИ дополнить до 700")
-                    retry_prompt = f"""Дополни следующий текст до 700 символов, сохранив стиль и смысл. Добавь важные детали.
+                            result = result[:600]
+                    result = format_paragraphs(result)
+                elif len(result) < 580:
+                    logger.info(f"📏 Текст {len(result)} символов, прошу ИИ дополнить до 600")
+                    retry_prompt = f"""Дополни следующий текст до 600 символов, сохранив стиль и смысл. Добавь важные детали. Текст разбивай на 2-3 абзаца пустой строкой.
 
 Текст для дополнения:
 {result}"""
@@ -950,7 +1013,7 @@ def process_text_with_deepseek(text, prompt_type='full', target_length=None):
                         json={
                             "model": "deepseek-chat",
                             "messages": [
-                                {"role": "system", "content": "Ты редактор. Дополни текст до 700 символов. Ответь только готовым текстом."},
+                                {"role": "system", "content": "Ты редактор. Дополни текст до 600 символов, разбивая на абзацы пустой строкой. Ответь только готовым текстом."},
                                 {"role": "user", "content": retry_prompt}
                             ],
                             "temperature": 0.5,
@@ -962,8 +1025,14 @@ def process_text_with_deepseek(text, prompt_type='full', target_length=None):
                         result = retry_response.json()["choices"][0]["message"]["content"].strip()
                         result = re.sub(r'^#+\s+', '', result, flags=re.MULTILINE)
                         result = result.strip()
-                        if len(result) > 700:
-                            result = result[:700]
+                        result = format_paragraphs(result)
+                        if len(result) > 600:
+                            cut_pos = result[:600].rfind('.')
+                            if cut_pos > 550:
+                                result = result[:cut_pos + 1]
+                            else:
+                                result = result[:600]
+                            result = format_paragraphs(result)
             
             return result
         return None
@@ -975,7 +1044,6 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
     """Создание поста в WordPress с правильной установкой рубрики"""
     status = 'future' if schedule_time else ('publish' if publish else 'draft')
     
-    # Очищаем заголовок перед отправкой
     title = clean_title(title)
     
     final_content = content
@@ -985,6 +1053,9 @@ def create_wp_post(title, content, post_type, category_slug=None, media_id=None,
     elif gallery_ids and len(gallery_ids) > 0:
         final_content = format_content_for_wp(content, None, gallery_ids, is_video=False)
         logger.info(f"🖼️ Галерея из {len(gallery_ids)} фото добавлена в контент")
+    else:
+        # Разбиваем на абзацы даже без медиа
+        final_content = format_content_for_wp(content)
     
     seo_title = title[:70]
     seo_description = generate_seo_description(title, content, post_type)
@@ -1101,28 +1172,28 @@ def get_action_keyboard(post_key):
 # ============ ФУНКЦИИ ДЛЯ TELEGRAM ============
 
 def clean_html_for_telegram(text):
-    """Очищает HTML теги и форматирует текст для Telegram"""
+    """Очищает HTML теги и форматирует текст для Telegram с сохранением абзацев"""
     text = re.sub(r'<[^>]+>', '', text)
     text = re.sub(r'\[video[^\]]*\]', '', text)
     text = re.sub(r'\[gallery[^\]]*\]', '', text)
     text = re.sub(r'\[[^\]]*\]', '', text)
     text = re.sub(r'https?://[^\s]+', '', text)
-    text = re.sub(r'\n\s*\n', '\n\n', text)
-    text = text.strip()
-    return text
+    # Нормализуем абзацы
+    text = format_paragraphs(text)
+    return text.strip()
 
 def shorten_text_for_telegram(text, rewrite=False):
-    """Создает краткую версию текста для Telegram через ИИ (ровно 700 символов)"""
+    """Создает краткую версию текста для Telegram через ИИ (ровно 600 символов)"""
     try:
         clean_text = clean_html_for_telegram(text)
         
-        if len(clean_text) == 700 and not rewrite:
-            logger.info(f"✅ Текст уже ровно 700 символов")
+        if len(clean_text) == 600 and not rewrite:
+            logger.info(f"✅ Текст уже ровно 600 символов")
             return clean_text
         
-        if len(clean_text) < 700 and not rewrite:
-            logger.info(f"📏 Текст {len(clean_text)} символов, дополняю до 700")
-            retry_prompt = f"""Дополни следующий текст до 700 символов, сохранив стиль и смысл. Добавь важные детали, если их не хватает. Текст должен быть связным и логичным.
+        if len(clean_text) < 600 and not rewrite:
+            logger.info(f"📏 Текст {len(clean_text)} символов, дополняю до 600")
+            retry_prompt = f"""Дополни следующий текст до 600 символов, сохранив стиль и смысл. Добавь важные детали, если их не хватает. Текст должен быть связным, логичным и разбитым на 2-3 абзаца пустой строкой.
 
 Текст для дополнения (сейчас {len(clean_text)} символов):
 {clean_text}"""
@@ -1135,7 +1206,7 @@ def shorten_text_for_telegram(text, rewrite=False):
                         json={
                             "model": "deepseek-chat",
                             "messages": [
-                                {"role": "system", "content": "Ты редактор. Дополни текст до 700 символов. Ответь только готовым текстом без пояснений."},
+                                {"role": "system", "content": "Ты редактор. Дополни текст до 600 символов, разбивая на абзацы пустой строкой. Ответь только готовым текстом без пояснений."},
                                 {"role": "user", "content": retry_prompt}
                             ],
                             "temperature": 0.5,
@@ -1147,19 +1218,21 @@ def shorten_text_for_telegram(text, rewrite=False):
                         result = response.json()["choices"][0]["message"]["content"].strip()
                         result = re.sub(r'^#+\s+', '', result, flags=re.MULTILINE)
                         result = result.strip()
+                        result = format_paragraphs(result)
                         
-                        if len(result) >= 680:
-                            if len(result) > 700:
-                                result = result[:700]
+                        if len(result) >= 580:
+                            if len(result) > 600:
+                                result = result[:600]
+                                result = format_paragraphs(result)
                             logger.info(f"✅ Текст дополнен до {len(result)} символов (попытка {attempt+1})")
                             return result
                     time.sleep(1)
                 except Exception as e:
                     logger.error(f"Ошибка при дополнении текста: {e}")
             
-            if len(clean_text) < 700:
+            if len(clean_text) < 600:
                 logger.warning("⚠️ Не удалось дополнить текст через ИИ, дополняю вручную")
-                return clean_text + " " * (700 - len(clean_text))
+                return clean_text + " " * (600 - len(clean_text))
         
         logger.info(f"🤖 Создаю {'новую' if rewrite else 'краткую'} версию текста для Telegram (сейчас {len(clean_text)} символов)")
         
@@ -1167,70 +1240,78 @@ def shorten_text_for_telegram(text, rewrite=False):
         result = process_text_with_deepseek(clean_text, prompt_type=prompt_type)
         
         if result:
+            result = format_paragraphs(result)
             logger.info(f"✅ {'Переписанный' if rewrite else 'Краткий'} текст: {len(result)} символов")
             return result
         
         logger.warning("⚠️ Не удалось создать текст через ИИ, обрезаю вручную")
-        if len(clean_text) > 700:
-            return clean_text[:700]
+        if len(clean_text) > 600:
+            return clean_text[:600]
         return clean_text
             
     except Exception as e:
         logger.error(f"❌ Ошибка обработки текста: {e}")
         clean_text = clean_html_for_telegram(text)
-        if len(clean_text) > 700:
-            return clean_text[:700]
+        if len(clean_text) > 600:
+            return clean_text[:600]
         return clean_text
 
 def insert_link_in_first_sentence(text, post_link):
     """
     Вставляет гиперссылку в одно из слов первого предложения.
-    Возвращает текст с HTML-ссылкой.
+    Работает с текстом, содержащим абзацы.
     """
     try:
         if not text or not post_link:
             return text
         
-        # Разбиваем на первое предложение и остальной текст
-        # Ищем конец первого предложения
-        match = re.search(r'([.!?])\s+', text)
+        # Разбиваем на абзацы
+        paragraphs = re.split(r'\n\s*\n', text)
+        if not paragraphs:
+            return text
+        
+        first_paragraph = paragraphs[0].strip()
+        rest_paragraphs = paragraphs[1:]
+        
+        # Ищем конец первого предложения в первом абзаце
+        match = re.search(r'([.!?])\s+', first_paragraph)
         
         if match:
-            first_sentence = text[:match.end()].strip()
-            rest_text = text[match.end():].strip()
+            first_sentence = first_paragraph[:match.end()].strip()
+            rest_of_first = first_paragraph[match.end():].strip()
         else:
-            # Если нет знаков препинания, все предложение - первое
-            first_sentence = text.strip()
-            rest_text = ""
+            first_sentence = first_paragraph
+            rest_of_first = ""
         
         # Находим слова в первом предложении (длиной от 3 символов)
         words = re.findall(r'\b[А-Яа-яЁёA-Za-z]{3,}\b', first_sentence)
         
         if not words:
-            # Если нет подходящих слов, просто возвращаем текст с ссылкой в конце первого предложения
-            if rest_text:
-                return first_sentence + f' <a href="{post_link}">Подробнее</a>. ' + rest_text
+            # Если нет подходящих слов — вставляем ссылку в конец первого предложения
+            if rest_of_first:
+                first_sentence = first_sentence + f' <a href="{post_link}">Подробнее</a>.'
             else:
-                return text + f' <a href="{post_link}">Подробнее</a>.'
-        
-        # Выбираем случайное слово для гиперссылки
-        word_to_link = random.choice(words)
-        
-        # Заменяем первое вхождение этого слова на гиперссылку
-        # Используем регулярное выражение для замены только целого слова
-        pattern = re.compile(r'\b' + re.escape(word_to_link) + r'\b', re.IGNORECASE)
-        
-        # Заменяем только первое вхождение
-        linked_first_sentence = pattern.sub(f'<a href="{post_link}">{word_to_link}</a>', first_sentence, count=1)
-        
-        if rest_text:
-            return linked_first_sentence + ' ' + rest_text
+                first_sentence = first_sentence + f' <a href="{post_link}">Подробнее</a>.'
         else:
-            return linked_first_sentence
+            # Выбираем случайное слово для гиперссылки
+            word_to_link = random.choice(words)
+            
+            # Заменяем первое вхождение
+            pattern = re.compile(r'\b' + re.escape(word_to_link) + r'\b', re.IGNORECASE)
+            first_sentence = pattern.sub(f'<a href="{post_link}">{word_to_link}</a>', first_sentence, count=1)
+        
+        # Собираем первый абзац обратно
+        if rest_of_first:
+            new_first_paragraph = first_sentence + ' ' + rest_of_first
+        else:
+            new_first_paragraph = first_sentence
+        
+        # Собираем все абзацы
+        result_paragraphs = [new_first_paragraph] + [p.strip() for p in rest_paragraphs if p.strip()]
+        return '\n\n'.join(result_paragraphs)
             
     except Exception as e:
         logger.error(f"❌ Ошибка вставки ссылки: {e}")
-        # В случае ошибки возвращаем текст с ссылкой в конце
         return text + f' <a href="{post_link}">Подробнее</a>.'
 
 def send_text_only_to_telegram(text):
@@ -1256,7 +1337,7 @@ def send_text_only_to_telegram(text):
         return False
 
 def publish_to_telegram_channel(title, content, post_link, media_file_id=None, video_file_id=None, gallery_file_ids=None):
-    """Публикует пост в Telegram канал с сокращением текста до 700 символов и гиперссылкой в первом предложении"""
+    """Публикует пост в Telegram канал с сокращением текста до 600 символов и гиперссылкой в первом предложении"""
     try:
         logger.info(f"📢 Начинаю публикацию в Telegram канал...")
         
@@ -1267,20 +1348,19 @@ def publish_to_telegram_channel(title, content, post_link, media_file_id=None, v
         chat_id = get_channel_id()
         logger.info(f"📢 Использую chat_id: {chat_id}")
         
-        # Очищаем заголовок
         title = clean_title(title)
         
         emoji = get_emoji_for_text(title + " " + content)
         logger.info(f"🎯 Выбран смайлик: {emoji}")
         
-        # Получаем сокращенный текст до 700 символов
+        # Получаем сокращенный текст до 600 символов с абзацами
         shortened_content = shorten_text_for_telegram(content)
         
         # Вставляем гиперссылку в первое предложение
         content_with_link = insert_link_in_first_sentence(shortened_content, post_link)
         logger.info(f"🔗 Гиперссылка вставлена в первое предложение")
         
-        # Формируем текст поста БЕЗ ссылки в конце
+        # Формируем текст поста
         telegram_text = f"{emoji} <b>{title}</b>\n\n{content_with_link}"
         
         if video_file_id:
@@ -1364,15 +1444,12 @@ def preview_telegram_post(title, content, post_link, chat_id, post_key, media_fi
     try:
         logger.info(f"📢 Показываю предпросмотр для публикации в Telegram...")
         
-        # Очищаем заголовок
         title = clean_title(title)
         
         emoji = get_emoji_for_text(title + " " + content)
         logger.info(f"🎯 Выбран смайлик: {emoji}")
         
         shortened_content = shorten_text_for_telegram(content)
-        
-        # Вставляем гиперссылку в первое предложение
         content_with_link = insert_link_in_first_sentence(shortened_content, post_link)
         
         media_type = "🎬 Видео" if video_file_id else "📸 Фото" if media_file_id else "📝 Текст"
@@ -1380,7 +1457,7 @@ def preview_telegram_post(title, content, post_link, chat_id, post_key, media_fi
         preview_text = f"<b>📢 ПРЕДПРОСМОТР ПУБЛИКАЦИИ В КАНАЛ</b>\n\n"
         preview_text += f"<b>Смайлик:</b> {emoji}\n"
         preview_text += f"<b>Заголовок:</b>\n{title}\n\n"
-        preview_text += f"<b>Текст (700 символов):</b>\n{content_with_link}\n\n"
+        preview_text += f"<b>Текст (600 символов):</b>\n{content_with_link}\n\n"
         preview_text += f"<b>Медиа:</b> {media_type}\n"
         preview_text += f"<b>Ссылка:</b>\n{post_link}\n\n"
         preview_text += f"<i>⬇️ Выберите действие:</i>"
@@ -1505,18 +1582,16 @@ def rewrite_telegram_text(post_key, chat_id, message_id):
             telegram_preview[post_key]['content'] = content
             telegram_preview[post_key]['rewritten_content'] = new_content
             
-            # Очищаем заголовок
             title = clean_title(title)
             emoji = post_data.get('emoji', get_emoji_for_text(title + " " + content))
             media_type = "🎬 Видео" if post_data.get('video_file_id') else "📸 Фото" if post_data.get('media_file_id') else "📝 Текст"
             
-            # Вставляем гиперссылку в первое предложение
             content_with_link = insert_link_in_first_sentence(new_content, post_link)
             
             preview_text = f"<b>📢 ПРЕДПРОСМОТР ПУБЛИКАЦИИ В КАНАЛ (НОВАЯ ВЕРСИЯ)</b>\n\n"
             preview_text += f"<b>Смайлик:</b> {emoji}\n"
             preview_text += f"<b>Заголовок:</b>\n{title}\n\n"
-            preview_text += f"<b>Новый текст (700 символов):</b>\n{content_with_link}\n\n"
+            preview_text += f"<b>Новый текст (600 символов):</b>\n{content_with_link}\n\n"
             preview_text += f"<b>Медиа:</b> {media_type}\n"
             preview_text += f"<b>Ссылка:</b>\n{post_data['post_link']}\n\n"
             preview_text += f"<i>⬇️ Выберите действие:</i>"
@@ -1600,7 +1675,6 @@ def publish_scheduled_post(post_key):
         category_slug = post_data.get('category_slug')
         is_video = post_data.get('is_video', False)
         
-        # Очищаем заголовок
         title = clean_title(title)
         
         video_url = None
@@ -1845,7 +1919,6 @@ def process_update(update_json):
                     
                     keyboard = get_action_keyboard(post_key)
                     
-                    # Очищаем заголовок
                     title = clean_title(post_data.get('title', 'Без заголовка'))
                     post_data['title'] = title
                     
@@ -1874,7 +1947,6 @@ def process_update(update_json):
                     
                     keyboard = get_action_keyboard(post_key)
                     
-                    # Очищаем заголовок
                     title = clean_title(post_data.get('title', 'Без заголовка'))
                     post_data['title'] = title
                     
@@ -1913,7 +1985,6 @@ def process_update(update_json):
                 gallery_file_ids = post_data.get('gallery_file_ids', [])
                 title = post_data.get('title', '')
                 
-                # Очищаем заголовок
                 title = clean_title(title)
                 post_data['title'] = title
                 
@@ -2034,7 +2105,6 @@ def process_update(update_json):
                 content = post_data.get('content', '')
                 category_slug = post_data.get('category_slug')
                 
-                # Очищаем заголовок
                 title = clean_title(title)
                 post_data['title'] = title
                 
@@ -2135,7 +2205,6 @@ def process_update(update_json):
                 content = post_data.get('content', '')
                 category_slug = post_data.get('category_slug')
                 
-                # Очищаем заголовок
                 title = clean_title(title)
                 post_data['title'] = title
                 
