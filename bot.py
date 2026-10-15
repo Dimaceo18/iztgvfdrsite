@@ -207,11 +207,14 @@ def format_paragraphs(text, max_paragraph_length=280):
     # Если уже есть абзацы (двойной перенос) — нормализуем и возвращаем
     if '\n\n' in text:
         paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+        # Убираем одиночные переносы внутри абзацев
+        paragraphs = [' '.join(p.split()) for p in paragraphs]
         return '\n\n'.join(paragraphs)
     
     # Если есть одиночные переносы — тоже считаем это абзацами
     if '\n' in text:
         paragraphs = [p.strip() for p in text.split('\n') if p.strip()]
+        paragraphs = [' '.join(p.split()) for p in paragraphs]
         return '\n\n'.join(paragraphs)
     
     # Разбиваем на предложения
@@ -828,7 +831,8 @@ def format_content_for_wp(text, video_url=None, gallery_ids=None, is_video=False
                     formatted.append(gallery_shortcode)
                     logger.info(f"🖼️ Добавлена галерея из {len(gallery_ids)} фото после 1-го абзаца")
     
-    return '\n'.join(formatted)
+    # Соединяем абзацы БЕЗ дополнительных переносов строк, чтобы WordPress не добавлял лишние отступы
+    return ''.join(formatted)
 
 def process_text_with_deepseek(text, prompt_type='full', target_length=None):
     """Обработка текста через DeepSeek с адаптивной длиной"""
