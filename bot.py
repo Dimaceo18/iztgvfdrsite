@@ -1178,40 +1178,59 @@ def clean_html_for_telegram(text):
     return text.strip()
 
 def shorten_text_for_telegram(text, rewrite=False):
-    """Создает краткую версию текста для Telegram через ИИ (ровно 500 символов, без обрезки)"""
+    """
+    Готовит текст для Telegram:
+    - Если текст ≤ 500 символов — возвращает как есть (НЕ растягиваем).
+    - Если текст > 500 символов — аккуратно сокращает через ИИ до 500 символов,
+      не переписывая новость заново, а убирая второстепенные детали.
+    - При rewrite=True — переписывает по-другому в пределах 500 символов
+      (используется только по кнопке "Переделать").
+    """
     try:
         clean_text = clean_html_for_telegram(text)
-        
-        # Если текст уже короткий и не требует переписывания
-        if len(clean_text) <= 500 and not rewrite:
-            logger.info(f"✅ Текст уже короче 500 символов ({len(clean_text)})")
-            return clean_text
-        
-        logger.info(f"🤖 Создаю {'новую' if rewrite else 'краткую'} версию текста для Telegram через ИИ (сейчас {len(clean_text)} символов)")
-        
-        # Всегда используем ИИ для сокращения до 500 символов
         target_length = 500
         
-        if rewrite:
-            base_prompt = f"""Перепиши этот текст для Telegram-канала по-другому, сохранив все главные факты и суть. Сделай текст ровно {target_length} символов.
-Он должен быть связным, логичным и заканчиваться законченной мыслью.
-НЕ обрезай текст — переформулируй и сократи его так, чтобы уложиться в {target_length} символов.
-Текст должен быть разбит на 2-3 абзаца, разделенных пустой строкой.
-Без троеточия, без смайликов, без символов # и **.
-Ответь ТОЛЬКО готовым текстом, без пояснений."""
-            system_prompt = f"Ты редактор новостного канала в Telegram. Перепиши текст по-другому, ровно {target_length} символов. Текст ОБЯЗАТЕЛЬНО разбивай на 2-3 абзаца пустой строкой. Не обрезай, а переформулируй. Ответь только готовым текстом."
-        else:
-            base_prompt = f"""Напиши краткую версию новости ровно на {target_length} символов. Сохрани все главные факты и суть.
-Текст должен быть связным, логичным и заканчиваться законченной мыслью.
-НЕ обрезай текст — переформулируй и сократи его так, чтобы уложиться в {target_length} символов.
-Текст должен быть разбит на 2-3 абзаца, разделенных пустой строкой.
-Без троеточия, без смайликов, без символов # и **.
-Ответь ТОЛЬКО готовым текстом, без пояснений."""
-            system_prompt = f"Ты редактор новостного канала в Telegram. Напиши краткую версию новости ровно {target_length} символов. Текст ОБЯЗАТЕЛЬНО разбивай на 2-3 абзаца пустой строкой. Не обрезай, а переформулируй. Ответь только готовым текстом."
+        # ===== СЛУЧАЙ 1: Короткий текст — НЕ растягиваем =====
+        if len(clean_text) <= target_length and not rewrite:
+            logger.info(f"✅ Текст короткий ({len(clean_text)} символов ≤ {target_length}), оставляю как есть")
+            return clean_text
         
-        # Пробуем несколько раз добиться нужной длины
+        # ===== СЛУЧАЙ 2: Длинный текст — аккуратно сокращаем =====
+        logger.info(f"✂️ Текст длинный ({len(clean_text)} символов), сокращаю до {target_length} без переписывания")
+        
+        if rewrite:
+            system_prompt = (
+                f"Ты редактор новостного канала в Telegram. Перепиши текст по-другому, "
+                f"сохранив все главные факты, и уложи его в {target_length} символов. "
+                f"НЕ обрезай резко — переформулируй так, чтобы текст заканчивался законченной мыслью. "
+                f"Разбей на 2-3 абзаца пустой строкой. Без троеточия, без смайликов, без # и **. "
+                f"Ответь только готовым текстом."
+            )
+            base_prompt = (
+                f"Перепиши текст по-другому, сохранив главные факты, ровно в {target_length} символов. "
+                f"Не обрезай — переформулируй. Разбей на 2-3 абзаца пустой строкой.\n\nТекст:\n"
+            )
+        else:
+            system_prompt = (
+                f"Ты редактор новостного канала в Telegram. Сократи текст до {target_length} символов, "
+                f"НЕ переписывая его заново и НЕ обрезая резко. "
+                f"Убирай только второстепенные детали, повторы и лишние уточнения, "
+                f"оставляя главные факты и смысл. Текст должен заканчиваться законченной мыслью. "
+                f"Разбей на 2-3 абзаца пустой строкой. Без троеточия, без смайликов, без # и **. "
+                f"Ответь только готовым текстом."
+            )
+            base_prompt = (
+                f"Сократи следующий текст до {target_length} символов. "
+                f"НЕ переписывай его заново — просто аккуратно убери второстепенные детали и повторы. "
+                f"Сохрани главные факты и законченную мысль. "
+                f"Разбей на 2-3 абзаца пустой строкой. Без троеточия и смайликов.\n\nТекст:\n"
+            )
+        
         result = None
-        for attempt in range(4):
+        current_text = clean_text
+        
+        # Делаем до 3 попыток, чтобы попасть в диапазон 400–500
+        for attempt in range(3):
             try:
                 response = requests.post(
                     DEEPSEEK_API_URL,
@@ -1220,68 +1239,79 @@ def shorten_text_for_telegram(text, rewrite=False):
                         "model": "deepseek-chat",
                         "messages": [
                             {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": f"{base_prompt}\n\nТекст:\n{clean_text}"}
+                            {"role": "user", "content": f"{base_prompt}{current_text}"}
                         ],
-                        "temperature": 0.7 if rewrite else 0.5,
+                        "temperature": 0.4,
                         "max_tokens": 900
                     },
                     timeout=60
                 )
-                if response.status_code == 200:
-                    candidate = response.json()["choices"][0]["message"]["content"].strip()
-                    candidate = re.sub(r'^#+\s+', '', candidate, flags=re.MULTILINE)
-                    candidate = re.sub(r'^Вот.*?:\s*', '', candidate, flags=re.IGNORECASE)
-                    candidate = candidate.strip()
-                    candidate = format_paragraphs(candidate)
+                
+                if response.status_code != 200:
+                    logger.error(f"❌ DeepSeek вернул {response.status_code}")
+                    continue
+                
+                candidate = response.json()["choices"][0]["message"]["content"].strip()
+                candidate = re.sub(r'^#+\s+', '', candidate, flags=re.MULTILINE)
+                candidate = re.sub(r'^Вот.*?:\s*', '', candidate, flags=re.IGNORECASE)
+                candidate = candidate.strip()
+                candidate = format_paragraphs(candidate)
+                
+                logger.info(f"📏 Попытка {attempt+1}: получено {len(candidate)} символов")
+                
+                # Попали в диапазон — принимаем
+                if 400 <= len(candidate) <= target_length:
+                    result = candidate
+                    logger.info(f"✅ Текст сокращен до {len(candidate)} символов (попытка {attempt+1})")
+                    break
+                
+                # Слишком длинный — просим ещё раз, но уже отталкиваясь от сокращённого варианта
+                if len(candidate) > target_length:
+                    current_text = candidate
+                    base_prompt = (
+                        f"Этот текст всё ещё длиннее {target_length} символов. "
+                        f"Сократи его аккуратно до {target_length} символов, "
+                        f"не переписывая заново. Убери второстепенные детали. "
+                        f"Сохрани главные факты и законченную мысль. Разбей на 2-3 абзаца.\n\nТекст:\n"
+                    )
+                    logger.info(f"🔄 Текст длиннее {target_length}, пробую ещё раз...")
+                    continue
+                
+                # Слишком короткий — принимаем, чтобы не потерять смысл
+                if len(candidate) < 400:
+                    result = candidate
+                    logger.info(f"⚠️ Текст короче 400 символов, принимаю как есть ({len(candidate)})")
+                    break
                     
-                    logger.info(f"📏 Попытка {attempt+1}: получено {len(candidate)} символов")
-                    
-                    # Если попали в диапазон 450-500 — принимаем
-                    if 450 <= len(candidate) <= 500:
-                        result = candidate
-                        logger.info(f"✅ Текст сокращен до {len(candidate)} символов (попытка {attempt+1})")
-                        break
-                    
-                    # Если больше 500 — просим сократить ещё раз
-                    if len(candidate) > 500:
-                        clean_text = candidate  # используем уже сокращенный вариант для следующей попытки
-                        base_prompt = f"""Сократи следующий текст ровно до {target_length} символов, сохранив главные факты. НЕ обрезай — переформулируй. Текст разбей на 2-3 абзаца пустой строкой. Без троеточия и смайликов.
-
-Текст:
-{candidate}"""
-                        logger.info(f"🔄 Текст длиннее 500, пробую ещё раз...")
-                        continue
-                    
-                    # Если меньше 450 — просим дополнить
-                    if len(candidate) < 450:
-                        result = candidate  # запоминаем на случай, если больше не получится
-                        clean_text = candidate
-                        base_prompt = f"""Дополни следующий текст до {target_length} символов, сохранив стиль и смысл. Добавь важные детали. Текст разбей на 2-3 абзаца пустой строкой.
-
-Текст:
-{candidate}"""
-                        logger.info(f"🔄 Текст короче 450, пробую дополнить...")
-                        continue
-                time.sleep(1)
             except Exception as e:
                 logger.error(f"Ошибка при попытке {attempt+1}: {e}")
+                time.sleep(1)
         
-        if result:
-            # Финальная проверка — если результат всё ещё больше 500, аккуратно сокращаем по предложениям
-            if len(result) > 500:
-                # Разбиваем на предложения и убираем последние, пока не уложимся
-                sentences = re.split(r'(?<=[.!?])\s+', result)
-                while len(sentences) > 1 and len(' '.join(sentences)) > 500:
-                    sentences.pop()
-                result = ' '.join(sentences)
-                result = format_paragraphs(result)
-                logger.info(f"✂️ Финальная корректировка по предложениям: {len(result)} символов")
-            
-            return result
+        # Если ИИ так и не справился — аккуратно сокращаем вручную ПО ПРЕДЛОЖЕНИЯМ (не по символам!)
+        if not result:
+            logger.warning("⚠️ ИИ не справился, сокращаю вручную по предложениям")
+            sentences = re.split(r'(?<=[.!?])\s+', clean_text)
+            accumulated = []
+            total = 0
+            for s in sentences:
+                if total + len(s) + 1 > target_length:
+                    break
+                accumulated.append(s)
+                total += len(s) + 1
+            result = ' '.join(accumulated) if accumulated else clean_text[:target_length]
+            result = format_paragraphs(result)
         
-        # Если ИИ не справился — используем исходный текст, но не обрезаем
-        logger.warning("⚠️ ИИ не справился, использую исходный текст")
-        return clean_text
+        # Финальная проверка — если результат всё ещё > 500, убираем лишние предложения с конца
+        if len(result) > target_length:
+            sentences = re.split(r'(?<=[.!?])\s+', result)
+            while len(sentences) > 1 and len(' '.join(sentences)) > target_length:
+                sentences.pop()
+            result = ' '.join(sentences)
+            result = format_paragraphs(result)
+            logger.info(f"✂️ Финальная корректировка по предложениям: {len(result)} символов")
+        
+        logger.info(f"✅ Итоговый текст для Telegram: {len(result)} символов")
+        return result
         
     except Exception as e:
         logger.error(f"❌ Ошибка обработки текста: {e}")
@@ -1488,7 +1518,7 @@ def preview_telegram_post(title, content, post_link, chat_id, post_key, media_fi
         preview_text = f"<b>📢 ПРЕДПРОСМОТР ПУБЛИКАЦИИ В КАНАЛ</b>\n\n"
         preview_text += f"<b>Смайлик:</b> {emoji}\n"
         preview_text += f"<b>Заголовок:</b>\n{title}\n\n"
-        preview_text += f"<b>Текст (500 символов):</b>\n{content_with_link}\n\n"
+        preview_text += f"<b>Текст (до 500 символов):</b>\n{content_with_link}\n\n"
         preview_text += f"<b>Медиа:</b> {media_type}\n"
         preview_text += f"<b>Ссылка:</b>\n{post_link}\n\n"
         preview_text += f"<i>⬇️ Выберите действие:</i>"
@@ -1622,7 +1652,7 @@ def rewrite_telegram_text(post_key, chat_id, message_id):
             preview_text = f"<b>📢 ПРЕДПРОСМОТР ПУБЛИКАЦИИ В КАНАЛ (НОВАЯ ВЕРСИЯ)</b>\n\n"
             preview_text += f"<b>Смайлик:</b> {emoji}\n"
             preview_text += f"<b>Заголовок:</b>\n{title}\n\n"
-            preview_text += f"<b>Новый текст (500 символов):</b>\n{content_with_link}\n\n"
+            preview_text += f"<b>Новый текст (до 500 символов):</b>\n{content_with_link}\n\n"
             preview_text += f"<b>Медиа:</b> {media_type}\n"
             preview_text += f"<b>Ссылка:</b>\n{post_data['post_link']}\n\n"
             preview_text += f"<i>⬇️ Выберите действие:</i>"
